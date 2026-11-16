@@ -1,0 +1,6 @@
+{
+  "name": "Career Intelligence Agent",
+  "description": "Henkilökohtainen työkalu kyberturvallisuusopiskelijalle työpaikka- ja harjoitteluilmoitusten näyttöön perustuvaan arviointiin sekä hakukohteiden seurantaan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

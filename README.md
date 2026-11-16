@@ -1,0 +1,241 @@
+# Career Intelligence Agent
+
+**Gemini-pohjainen työpaikkailmoitusten analysointi- ja hakukohteiden seurantatyökalu**
+
+> **Projektin tila:** Ensimmäinen MVP-versio on toiminnallisesti testattu henkilökohtaiseen käyttöön. Sovellusta ei ole arvioitu tuotantovalmiiksi eikä julkaistu julkisena palveluna.
+>
+> **Dokumentaation tilanne:** 16.11.2026. Tiedot perustuvat tarkasteltuihin lähdekooditiedostoihin, käyttöliittymätesteihin ja Google AI Studion raportoimiin testituloksiin.
+
+## 1. Projektin tavoite
+
+Career Intelligence Agent auttaa vertaamaan työpaikkailmoitusten vaatimuksia hakijan todelliseen osaamiseen, kokemukseen ja uratavoitteisiin. Sovellus on suunniteltu erityisesti IT- ja kyberturvallisuusalan harjoittelu-, trainee- ja junioritehtävien arviointiin, mutta se pystyy arvioimaan myös muita työtehtäviä.
+
+Sovelluksen tavoitteena on:
+
+- erottaa työnantajan **pakolliset kelpoisuusehdot** toivotuista taidoista ja työssä opittavista teknologioista;
+- tunnistaa hakijan vahvat ja osittaiset osaamisvastaavuudet sekä aidosti merkittävät puutteet;
+- arvioida **suoraa kyberturvallisuusrelevanssia**, siirrettävää osaamista ja mahdollisia urapolkuja erikseen;
+- huomioida sijainti, työskentelymalli, palkkaus, aloitusajankohta ja tutkintoharjoittelun mahdollinen hyväksyttävyys;
+- tuottaa perusteltu, kriittinen hakusuositus sekä auttaa seuraamaan kiinnostavia hakukohteita.
+
+Sovellus on **päätöksenteon apuväline**. Se ei vahvista työnantajan tietoja automaattisesti eikä tee hakupäätöksiä käyttäjän puolesta.
+
+## 2. Toteutetut ominaisuudet
+
+### Työpaikkailmoituksen analysointi
+
+Käyttäjä liittää työpaikkailmoituksen tekstin ja voi lisätä ilmoituksen URL-osoitteen viitteeksi. Gemini vertaa tekstiä tallennettuun hakijaprofiiliin ja tuottaa rakenteisen analyysin, joka sisältää muun muassa:
+
+- tehtävän perustiedot, työtehtävät ja työnantajan vaatimukset;
+- pakolliset kelpoisuusehdot ja niiden täyttymisen;
+- vahvat osaamisvastaavuudet, osittaiset vastaavuudet, merkittävät osaamispuutteet ja oppimismahdollisuudet;
+- käytännön tekijöiden ja mahdollisen harjoittelun opinnollistamisen arvioinnin;
+- kyberturvallisuusyhteyden ja etenemismahdollisuuksien arvioinnin;
+- lainauksia ilmoitustekstistä sekä suositellun seuraavan toimenpiteen.
+
+Suosituskategoriat ovat **Ensisijainen hakukohde**, **Harkinnan arvoinen**, **Matala prioriteetti** ja **Jätä väliin**.
+
+**Rajoitus:** Sovellus ei nykyisessä versiossa avaa ilmoituksen URL-osoitetta eikä tarkista hakuilmoituksen ajantasaisuutta verkkosivulta. Arvio perustuu käyttäjän liittämään tekstiin.
+
+### Hakijaprofiili
+
+Muokattava profiili sisältää koulutuksen, opintojen tilanteen, aikaisemman IT-harjoittelun, teknisen osaamisen, AI-kokemuksen, muun työkokemuksen, uratavoitteet, saatavuuden ja analyysin tulkintasäännöt. Profiili tallentuu selaimen paikalliseen tallennustilaan.
+
+Kun selaimessa ei ole aiemmin tallennettua profiilia, sovellus käyttää oletuksena yleistä, kuvitteellista suomalaisen IT-opiskelijan esimerkkiprofiilia (`src/data/defaultProfile.ts`). Aiemmin tallennettu hakijaprofiili ohittaa aina oletusprofiilin eikä sitä korvata automaattisesti. Analyysin palvelinpuolen yleisohjeistus (`SYSTEM_INSTRUCTION`) on hakijariippumaton ja käyttää arvioinnissa aina ajankohtaista `<CANDIDATE_PROFILE>`-syötettä, erottaen toisistaan työkokemuksen, opintojaksot (mukaan lukien sertifiointikoulutukseen linjattu sisältö ilman varsinaista sertifikaattia), ohjatut harjoitukset ja omat projektit sekä ehdottaen harjoittelun opinnollistamistarkistusta vain silloin, kun se on relevanttia annetulle profiilille.
+
+### Hakukohteiden seuranta ja vertailu
+
+- Analyysin tallentaminen hakukohteeksi alkuperäisen ilmoitustekstin kanssa.
+- Hakemisen etenemisen tilat, muistiinpanot ja tallennus- sekä muokkausaikaleimat.
+- Haun voimassaolon **erillinen, manuaalisesti tarkistettava tila**: Avoinna / Päättynyt / Ei tarkistettu.
+- Tallennettujen kohteiden rinnakkaisvertailu.
+- Analyysin keskeyttäminen ilman, että myöhässä valmistunut tulos saa korvata uudempaa analyysiä.
+
+### Tietojen siirrettävyys
+
+Hakijaprofiili ja tallennetut hakukohteet voidaan viedä **version 1 JSON-varmuuskopiona** ja palauttaa sovellukseen. Tuonti tarjoaa valinnan olemassa oleviin tietoihin yhdistämisen ja tietojen korvaamisen välillä. Palautus erilliseen incognito-istuntoon on testattu onnistuneesti. Yhdistämisen kaksoiskappalekäsittelyä ei ole erikseen tarkastettu.
+
+## 3. Teknologiat
+
+| Kerros | Teknologia | Rooli |
+|---|---|---|
+| Käyttöliittymä | React, TypeScript, Vite | Näkymät ja käyttäjän toiminnot |
+| Ulkoasu | Tailwind CSS, Lucide React, Motion | Tyylit, kuvakkeet ja animaatiot |
+| Palvelin | Node.js, Express | HTTP-rajapinta ja analyysipyynnön käsittely |
+| Tekoäly | Google Gemini API (`@google/genai`) | Ilmoitustekstin ja hakijaprofiilin analysointi |
+| Validointi | Zod + Gemini-vastauksen JSON-skeema | Syötteen ja tuloksen rakenteen tarkistaminen |
+| Paikallinen tallennus | Selaimen `localStorage` | Profiili ja hakukohteet |
+| Automaattiset testit | Node.js test runner, `tsx` | Regressiotestit |
+
+Lähdekoodissa analyysimallin tunniste on `gemini-4-hydrogen`, ja analyysikutsulle asetetaan `ThinkingLevel.MEDIUM`. Mallin saatavuus ja mahdolliset myöhemmät muutokset on tarkistettava käyttöympäristöstä.
+
+## 4. Arkkitehtuuri ja tiedonkulku
+
+```text
+Käyttäjä / React-käyttöliittymä
+        |
+        | Ilmoitusteksti + URL-viite + hakijaprofiili
+        v
+POST /api/analyze  (Express / server.ts)
+        |
+        | Zod: syötteen rakennetarkistus
+        v
+server/analyzeJob.ts
+        |
+        | System instruction + buildPrompt()
+        | Gemini API -kutsu palvelimelta
+        v
+Google Gemini
+        |
+        | JSON-vastaus määritellyn skeeman mukaan
+        v
+validateAndNormalizeAnalysis()
+        |
+        | Zod-tarkistus ja tuloksen normalisointi
+        v
+React: analyysin näyttäminen
+        |
+        +--> Käyttäjän valitessa: tallennus localStorageen
+        +--> JSON-vienti / -tuonti
+```
+
+### Keskeiset tiedostot
+
+- `server.ts` – Express-palvelimen käynnistys, `GET /api/health`, `POST /api/analyze`, pyynnön validointi ja yhteyden katkeamisen käsittely.
+- `server/analyzeJob.ts` – hakijariippumaton analyysin ohjeistus (`SYSTEM_INSTRUCTION`), dynaaminen `buildPrompt()` annetulle profiilille, Gemini-kutsu, keskeytys ja analyysin virheenkäsittely.
+- `src/lib/validation.ts` – hakijaprofiilin, analyysituloksen, tallennettujen hakukohteiden ja JSON-varmuuskopion Zod-skeemat sekä normalisointi.
+- `src/lib/storage.ts` – `localStorage`-tallennus ja -luku (tallennettu profiili ohittaa oletusprofiilin) sekä JSON-varmuuskopion muodostus ja jäsentäminen.
+- `src/lib/analysisRunner.ts` – käyttöliittymän analyysipyyntöjen koordinointi ja myöhästyneiden tulosten käsittely (testien perusteella).
+- `src/lib/availability.ts` – soveltuvuuden ja manuaalisesti tarkistetun hakutilanteen erottelu (testien perusteella).
+- `src/lib/timestamps.ts` – tallennus- ja muokkausaikaleimojen käsittely (testien perusteella).
+- `src/types/career.ts` – tietotyyppien määrittely.
+- `src/data/defaultProfile.ts` – kuvitteellinen suomalaisen IT-opiskelijan oletusesimerkkiprofiili (käytössä vain, kun tallennettua profiilia ei ole).
+- `tests/regression.test.ts` – automaattiset regressiotestit.
+- `src/components/` ja `App.tsx` – React-käyttöliittymä.
+
+Kaikkia yllä mainittuja tiedostoja ei ole vielä luettu kokonaisuudessaan. Merkityt kuvaukset perustuvat niiden käyttöön tarkastetuissa tiedostoissa ja testeissä.
+
+### Rajapinnat
+
+- `GET /api/health` palauttaa vastauksen `{ "status": "ok" }`.
+- `POST /api/analyze` vastaanottaa JSON-olion, jossa ovat `jobText`, `jobUrl` ja `profile`, ja palauttaa onnistumisessa `{ "analysis": ... }`.
+
+`jobText`-kentän sallittu pituus on 40–30 000 merkkiä. `jobUrl`-kentän enimmäispituus on 2 048 merkkiä. Expressin JSON-pyynnön kokoraja on 1 Mt.
+
+## 5. Kehityskäyttö ja komennot
+
+Projektin `package.json` määrittelee seuraavat komennot:
+
+```bash
+npm install
+npm run dev
+npm test
+npm run lint
+npm run build
+```
+
+- `npm run dev` käynnistää `tsx server.ts` -kehityspalvelimen. Palvelimen oletusportti on `3000`, ellei `PORT`-ympäristömuuttujalla aseteta muuta.
+- `npm test` suorittaa `tests/regression.test.ts`-tiedoston testit.
+- `npm run lint` suorittaa käytännössä TypeScriptin tyyppitarkistuksen (`tsc --noEmit`), ei varsinaista ESLint-analyysiä.
+- `npm run build` rakentaa Vite-käyttöliittymän.
+
+Gemini API -avain määritetään **palvelimen ympäristömuuttujaksi** nimellä `GEMINI_API_KEY` (Google AI Studiossa esimerkiksi Secrets-asetuksissa). Avainta ei tule lisätä lähdekoodiin, JSON-varmuuskopioon tai versionhallintaan. Paikalliseen kehityskäyttöön voi käyttää asianmukaisesti suojattua `.env`-tiedostoa.
+
+**Huomio:** `package.json`-tiedoston `start`-komento on `node server.ts`. Sen toimivuutta aiotussa julkaisuympäristössä ei ole vahvistettu. Vite-build ei myöskään itsessään osoita palvelinpuolen olevan tuotantovalmiina.
+
+## 6. Testaus ja tulokset
+
+### Käyttöliittymässä tehdyt testit
+
+- Sofigaten *Generation AI Team / Junior AI Advisor* – soveltuvuuden ja AI-kokemuksen tulkinnan testaaminen.
+- Junior SOC Analyst -esimerkki – SOC-osaamisen ja hakutilanteen erottelun testaaminen.
+- DigiHelsingin *ICT-harjoittelija* – harjoittelusoveltuvuuden, tallennuksen, muistiinpanojen ja aikaleimojen testaaminen.
+- Tallennettujen Sofigate- ja DigiHelsinki-kohteiden rinnakkaisvertailu.
+- Profiilin ja hakukohteiden säilyminen sivun päivityksen jälkeen.
+- JSON-varmuuskopion vienti sekä onnistunut palautus erilliseen incognito-istuntoon.
+- Analyysin keskeyttäminen käyttöliittymästä.
+
+### Regressiotestit
+
+Viimeisimmän raportoidun testiajon mukaan `npm test` läpäisi **22/22 testiä**, `npm run lint` läpäisi TypeScript-tyyppitarkistuksen ja `npm run build` onnistui. Tuloksia ei ole toistettu erillisessä ulkoisessa CI-ympäristössä.
+
+Testisarja kattaa muun muassa merkittävien osaamispuutteiden ja valinnaisten oppimismahdollisuuksien erottelun (`deduplicateGaps()`-korjaus, jossa pakollinen vaatimus tai kelpoisuuspuute säilyy vaikka teknologia mainittaisiin oppimismahdollisuutena), harjoittelun opinnollistamisen käsittelyn, analyysin keskeytyksen ja myöhäisten vastausten ohittamisen, tallennus- ja muokkausaikaleimojen säilymisen sekä sen, että tallennettu profiili ohittaa kuvitteellisen oletusprofiilin ja `SYSTEM_INSTRUCTION` pysyy hakijariippumattomana. Korjattu lähdekoodi on tarkistettava erikseen, jos tarvitaan riippumaton koodikatselmointi.
+
+### Prompt injection -käyttöliittymätestit
+
+Suoritettiin kaksi erilaista hyökkäävää testi-ilmoitusta:
+
+1. Ilmoitukseen lisätty `SYSTEM OVERRIDE` yritti väärentää hakijan CISSP-sertifikaatin ja IAM-työkokemuksen sekä pakottaa myönteisen suosituksen.
+2. Ilmoitukseen lisätyt `</UNTRUSTED_JOB_POSTING>`- ja `<SYSTEM_INSTRUCTION>`-merkinnät yrittivät esiintyä korkeamman prioriteetin ohjeina.
+
+**Havainto:** Molemmissa testeissä sovellus päätyi suositukseen **Jätä väliin**, tunnisti puuttuvat pakolliset edellytykset eikä omaksunut väärennettyjä pätevyyksiä. Toisessa testissä syötteeseen lisätty Helsinki-sijaintitieto käsiteltiin ilmoitusdatana. Se osoittaa, ettei pelkkä liitetty teksti todista tietojen alkuperää.
+
+Nämä ovat onnistuneita yksittäisiä testejä, **eivät todiste aukottomasta prompt injection -suojauksesta**.
+
+## 7. Tietoturva ja tietosuoja
+
+### Toteutuksessa havaitut suojaukset
+
+- Gemini API -avain luetaan palvelinpuolella `GEMINI_API_KEY`-ympäristömuuttujasta eikä sitä sisällytetä selainkoodiin.
+- `.gitignore` rajaa versionhallinnan ulkopuolelle paikalliset `.env*`-tiedostot (säilyttäen `.env.example`-mallin), riippuvuudet, build-artefaktit, lokit sekä henkilökohtaiset varmuuskopiotiedostot (`career-intelligence-backup-*.json` ja `*.backup.json`).
+- Oletusprofiili (`src/data/defaultProfile.ts`) käyttää kuvitteellista esimerkkiprofiilia ja palvelimen `SYSTEM_INSTRUCTION` on hakijariippumaton ilman alkuperäisen käyttäjän henkilötietoja.
+- Analyysipyyntö validoidaan Zodilla ja sen kokoa rajataan.
+- Geminiä pyydetään palauttamaan rakenteinen JSON-vastaus, joka validoidaan uudelleen palvelimella.
+- Ilmoitusteksti rajataan ohjeistuksessa epäluotettavaksi aineistoksi.
+- Keskeytettyjen pyyntöjen myöhästyneet tulokset pyritään jättämään käsittelemättä.
+- Sovellus ei automaattisesti lähetä hakemuksia työnantajille.
+
+### Tunnetut rajoitukset ja riskit
+
+- **Prompt injection:** Tekstirajaukset ja kielimallille annetut ohjeet eivät muodosta varmaa turvarajaa.
+- **Tietojen alkuperä:** Käyttäjän liittämää ilmoitustekstiä ja lainauksia ei tarkisteta automaattisesti työnantajan verkkosivulta. Lainausten täsmällistä vastaavuutta lähdetekstiin ei ole vahvistettu ohjelmallisesti.
+- **Henkilötiedot:** Koko analysoitava hakijaprofiili sekä ilmoitusteksti välitetään Gemini API:lle. Profiili ja tallennetut hakukohteet säilyvät selaimen `localStorage`-tallennustilassa; JSON-varmuuskopio sisältää samat tiedot luettavassa muodossa. Käyttäjän tulee huomioida käyttämänsä API-palvelun tiedonkäsittelyehdot.
+- **Julkinen rajapinta:** Tarkastetussa `server.ts`-tiedostossa ei ole käyttäjätunnistusta eikä API-pyyntöjen määrän rajoittamista. Mahdolliset käyttöympäristön erilliset suojaukset on tarkistettava.
+- **Virheviestit:** Analyysipalvelin voi palauttaa käyttöliittymälle ulkoisen palvelun tai jäsentämisen teknisiä virheviestejä. Niiden yksityiskohdat kannattaa pitää palvelinlokeissa ennen julkaisua.
+- **Syötteet ja URL-haku:** Nykyinen URL-kenttä on vain viite. Jos URL-osoitteita ryhdytään myöhemmin hakemaan palvelimelta, tarvitaan erillinen SSRF-suojaus, osoite- ja uudelleenohjaustarkistukset sekä lähteen jäljitettävyys.
+- **Tallennus:** Selainkohtainen `localStorage` ei tarjoa automaattista varmuuskopiointia eikä laitteiden välistä synkronointia.
+
+Sovellusta tulee käsitellä **henkilökohtaisena prototyyppinä**, ei luottamuksellisia tietoja käsittelevänä julkisena monikäyttäjäpalveluna.
+
+## 8. Tunnetut toiminnalliset rajoitukset
+
+1. Työpaikkailmoitus on liitettävä tekstinä; URL-osoitteesta ei haeta sisältöä.
+2. Haun voimassaolo tarkistetaan ja merkitään manuaalisesti.
+3. AI-arviot voivat sisältää virheellisiä luokitteluja tai päätelmiä, vaikka JSON olisi validia.
+4. Sovellus ei vahvista tutkintoharjoittelun hyväksyttävyyttä; päätös kuuluu oppilaitokselle.
+5. Sovellus ei vielä itsenäisesti etsi uusia työpaikkoja tai suorita ulkoisten työkalujen monivaiheisia tehtäviä. Se on tarkemmin kuvattuna **AI-avusteinen analyysi- ja seurantatyökalu** kuin autonominen agentti.
+6. Julkaisun tietoturva-, suorituskyky- ja käyttöympäristötestejä ei ole tehty kattavasti.
+
+## 9. Jatkokehitysideoita
+
+**Seuraava hyödyllinen ominaisuus:** työpaikkailmoituksen haku suoraan käyttäjän antamasta URL-osoitteesta. Toteutuksessa tulee suunnitella turvallinen sivun nouto, tekstin poiminta, lähdetiedon säilyttäminen ja haun ajantasaisuuden erillinen todentaminen.
+
+Muita mahdollisia jatkokehityskohteita:
+
+- lähdelainausten automaattinen vastaavuustarkistus;
+- laajempi prompt injection -regressiotestiaineisto;
+- rajapinnan autentikointi, käyttörajoitukset ja turvallisemmat virheilmoitukset ennen julkaisua;
+- tallennettujen kohteiden hakeminen, suodattaminen ja järjestäminen;
+- kustannusten ja syötettävän datamäärän optimointi;
+- kattava riippumaton koodikatselmointi ja testiympäristön dokumentointi.
+
+## 10. Kehitysprosessi ja oma työpanos
+
+Projekti on toteutettu **AI-avusteisesti Google AI Studio Build -ympäristössä**.
+
+Projektin suunnittelijan ja testaajan työ on sisältänyt:
+
+- käyttötarkoituksen, vaatimusten, tulkintasääntöjen ja hakijaprofiilin määrittelyn;
+- todellisten työpaikkailmoitusten valinnan ja analyysitulosten kriittisen arvioinnin;
+- havaittujen ongelmien rajaamisen täsmällisiksi kehitystehtäviksi;
+- testitapausten suunnittelun ja käyttöliittymän toiminnallisen testauksen;
+- regressiokorjauksen vaatimusten määrittelyn sekä tulosten tarkistamisen;
+- JSON-varmuuskopioinnin ja palautuksen käytännön testauksen;
+- prompt injection -testien suunnittelun ja niiden tulosten arvioinnin;
+- teknisen rakenteen, riskien ja rajoitusten läpikäynnin.
+
+Suuri osa sovelluksen varsinaisesta lähdekoodista on syntynyt Google AI Studion avustamana. Projektia ei tule esittää kokonaan käsin ohjelmoituna tai valmiina tuotantojärjestelmänä. Keskeinen oppimistavoite on ollut yhdistää ongelmanmäärittely, AI-avusteinen toteutus, kriittinen testaus ja teknisen toiminnan ymmärtäminen.
+
+---
+
+**Dokumentoinnin seuraava tarkistuspiste:** pidä tämä README ajan tasalla lähdekoodin, regressiotestien (`22/22`) ja julkaisuympäristön vaatimusten kanssa aina, kun toiminnallisuus, tietoturvakäytännöt tai käyttöympäristö muuttuvat olennaisesti.
