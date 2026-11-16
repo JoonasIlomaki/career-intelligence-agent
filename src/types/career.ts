@@ -182,3 +182,57 @@ export interface CareerBackupPayload {
   profile: CandidateProfile;
   savedJobs: SavedJobEntry[];
 }
+
+export type JobFetchMethod =
+  | "schema_org_jsonld"
+  | "jsonld_and_html"
+  | "html_fallback";
+
+export type JobFetchConfidence = "high" | "uncertain" | "partial";
+
+export type JobCoverageStatus = "complete" | "partial" | "uncertain";
+
+export type DeadlineSourceType = "structured_jsonld" | "body_text";
+
+export type DeadlineAssessmentStatus =
+  | "consistent"
+  | "structured_only"
+  | "body_only"
+  | "conflict"
+  | "missing";
+
+export interface ExtractedDeadlineCandidate {
+  value: string;
+  rawValue: string;
+  isoDate: string | null;
+  source: DeadlineSourceType;
+  sourceLabel: string;
+  excerpt?: string | null;
+}
+
+export interface JobDeadlineAssessment {
+  status: DeadlineAssessmentStatus;
+  hasConflict: boolean;
+  isConfirmed: boolean;
+  structuredDeadline: ExtractedDeadlineCandidate | null;
+  bodyDeadline: ExtractedDeadlineCandidate | null;
+  conflictWarning: string | null;
+}
+
+export interface FetchedJobResult {
+  sourceUrl: string;
+  title: string | null;
+  company: string | null;
+  deadline: string | null;
+  deadlineInfo: JobDeadlineAssessment;
+  extractedText: string;
+  fetchMethod: JobFetchMethod;
+  networkStatus: "ok";
+  coverageStatus: JobCoverageStatus;
+  confidence: JobFetchConfidence;
+  detectedSections: string[];
+  coverageSummary: string;
+  warning: string | null;
+  fetchedAt: string;
+}
+

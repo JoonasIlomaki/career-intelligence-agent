@@ -556,15 +556,39 @@ export const jobAnalysisResultSchema = z.object({
   urlVerificationNotice: z.string().trim().min(1),
 });
 
+function normalizeConflictingDeadlineOutput(
+  modelDeadline: string,
+  rawJobText?: string
+): string {
+  if (!rawJobText) return modelDeadline;
+  const conflictHeaderMatch =
+    /^Hakuaika\s*\(RISTIRIITAINEN[^)]*\)\s*:\s*(.+)$/im.exec(rawJobText);
+  if (!conflictHeaderMatch) return modelDeadline;
+
+  const conflictSummary = conflictHeaderMatch[1].trim();
+  const normalizedModel = modelDeadline.trim();
+  if (/ristiriit|konflikti|tarkistettava/i.test(normalizedModel)) {
+    return normalizedModel;
+  }
+
+  return `Ristiriitainen (tarkistettava): ${conflictSummary}`;
+}
+
 export function validateAndNormalizeAnalysis(
   raw: unknown,
-  providedUrl: string
+  providedUrl: string,
+  rawJobText?: string
 ): JobAnalysisResult {
   const parsed = jobAnalysisResultSchema.parse(raw);
   const cleanUrl = providedUrl.trim();
   const enforcedUrlNotice = cleanUrl
-    ? `Annettua URL-osoitetta (${cleanUrl}) ei ole avattu eikä sen sisältöä tai haun voimassaoloa ole varmistettu. Liitetty teksti tai URL ei yksinään todista, että haku on avoinna.`
-    : "URL-osoitetta ei annettu. Sovellus ei ole tarkistanut haun voimassaoloa; liitetty ilmoitusteksti ei yksinään todista, että haku on avoinna.";
+    ? `Analyysi perustuu syötettyyn ilmoitustekstiin (käsin liitettyyn tai erillisellä URL-noudolla haettuun viiteosoitteesta ${cleanUrl}). Tämä analyysi ei tarkista haun voimassaoloa verkosta; pelkkä teksti, onnistunut URL-nouto tai viite-URL ei yksinään todista, että haku on avoinna.`
+    : "URL-osoitetta ei annettu. Analyysi perustuu syötettyyn ilmoitustekstiin, eikä se yksinään todista, että haku on avoinna.";
+
+  const normalizedDeadline = normalizeConflictingDeadlineOutput(
+    parsed.extracted.deadline,
+    rawJobText
+  );
 
   const rawLearningOpportunities = deduplicateLearningOpportunities(
     parsed.skillsComparison.learningOpportunities ?? []
@@ -614,7 +638,7 @@ export function validateAndNormalizeAnalysis(
       parsed.extracted.location !== MISSING_VALUE
         ? `${parsed.extracted.location} (${parsed.extracted.workModel})`
         : MISSING_VALUE,
-    scheduleAndStart: parsed.extracted.deadline,
+    scheduleAndStart: normalizedDeadline,
     employmentTypeNote: parsed.extracted.employmentType,
     salaryNote: parsed.extracted.salaryInfo,
     internshipCreditAssessment: MISSING_VALUE,
@@ -622,6 +646,10 @@ export function validateAndNormalizeAnalysis(
 
   return {
     ...parsed,
+    extracted: {
+      ...parsed.extracted,
+      deadline: normalizedDeadline,
+    },
     skillsComparison: {
       ...parsed.skillsComparison,
       strongMatches,
@@ -698,3 +726,12 @@ export const analyzeRequestSchema = z.object({
     .default(""),
   profile: candidateProfileSchema,
 });
+
+export const fetchJobRequestSchema = z.object({
+  url: z
+    .string()
+    .trim()
+    .min(1, "Anna työpaikkailmoituksen URL-osoite.")
+    .max(2048, "URL-osoite on liian pitkä."),
+});
+

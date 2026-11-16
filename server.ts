@@ -3,8 +3,12 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { analyzeRequestSchema } from "./src/lib/validation.ts";
+import {
+  analyzeRequestSchema,
+  fetchJobRequestSchema,
+} from "./src/lib/validation.ts";
 import { analyzeJobPosting, AnalysisError } from "./server/analyzeJob.ts";
+import { fetchJobFromUrl, JobFetchError } from "./server/fetchJob.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,6 +70,56 @@ async function startServer() {
       console.error("Unexpected analysis failure:", error);
       res.status(500).json({
         error: "Analyysi epäonnistui odottamattoman palvelinvirheen vuoksi.",
+      });
+    } finally {
+      req.off("aborted", handleClientDisconnect);
+      res.off("close", handleClientDisconnect);
+    }
+  });
+
+  app.post("/api/fetch-job", async (req, res) => {
+    const parsedReq = fetchJobRequestSchema.safeParse(req.body);
+    if (!parsedReq.success) {
+      const firstIssue = parsedReq.error.issues[0];
+      res.status(400).json({
+        error: firstIssue?.message ?? "Virheellinen URL-pyyntö.",
+      });
+      return;
+    }
+
+    const controller = new AbortController();
+    const handleClientDisconnect = () => {
+      if (!res.writableFinished) {
+        controller.abort();
+      }
+    };
+
+    req.on("aborted", handleClientDisconnect);
+    res.on("close", handleClientDisconnect);
+
+    try {
+      const result = await fetchJobFromUrl(parsedReq.data.url, {
+        signal: controller.signal,
+      });
+
+      if (controller.signal.aborted || res.writableEnded || res.destroyed) {
+        return;
+      }
+
+      res.json(result);
+    } catch (error) {
+      if (controller.signal.aborted || res.writableEnded || res.destroyed) {
+        return;
+      }
+
+      if (error instanceof JobFetchError) {
+        res.status(error.statusCode).json({ error: error.message });
+        return;
+      }
+
+      console.error("Unexpected job fetch failure:", error);
+      res.status(500).json({
+        error: "Ilmoituksen nouto epäonnistui odottamattoman palvelinvirheen vuoksi. Voit liittää ilmoitustekstin käsin.",
       });
     } finally {
       req.off("aborted", handleClientDisconnect);

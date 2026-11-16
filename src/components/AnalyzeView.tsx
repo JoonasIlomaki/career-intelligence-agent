@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
+  AlertTriangle,
   BookmarkPlus,
   Check,
+  Globe,
   Info,
   Loader2,
   OctagonX,
@@ -12,12 +14,14 @@ import {
 import type {
   ApplicationAvailabilityStatus,
   CandidateProfile,
+  FetchedJobResult,
   JobAnalysisResult,
   SavedJobEntry,
   SavedJobStatus,
 } from "../types/career.ts";
 import { AnalysisRequestCoordinator } from "../lib/analysisRunner.ts";
 import { findPotentialDuplicates } from "../lib/duplicates.ts";
+import { formatSavedJobTimestamp } from "../lib/timestamps.ts";
 import { AnalysisResultView } from "./AnalysisResultView.tsx";
 
 interface AnalyzeViewProps {
@@ -62,14 +66,25 @@ export function AnalyzeView({
   const [cancelledMessage, setCancelledMessage] = useState<string | null>(null);
   const [result, setResult] = useState<JobAnalysisResult | null>(null);
 
+  const [isFetchingJob, setIsFetchingJob] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [fetchResult, setFetchResult] = useState<FetchedJobResult | null>(null);
+  const [deadlineConflictAcknowledged, setDeadlineConflictAcknowledged] =
+    useState(false);
+  const [pendingOverwriteUrl, setPendingOverwriteUrl] = useState<string | null>(
+    null
+  );
+
   const coordinatorRef = useRef(
     new AnalysisRequestCoordinator<JobAnalysisResult>()
   );
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const coordinator = coordinatorRef.current;
     return () => {
       coordinator.cancel();
+      fetchAbortRef.current?.abort();
     };
   }, []);
 
@@ -102,6 +117,18 @@ export function AnalyzeView({
     setErrorMessage(null);
     setCancelledMessage(null);
     setSavedSuccessId(null);
+    setPendingOverwriteUrl(null);
+
+    const hasUnresolvedConflictHeader =
+      Boolean(fetchResult?.deadlineInfo?.hasConflict) &&
+      /Hakuaika\s*\(RISTIRIITAINEN/i.test(jobText);
+
+    if (hasUnresolvedConflictHeader && !deadlineConflictAcknowledged) {
+      setErrorMessage(
+        "Hakuaika on ristiriitainen. Tarkista tai korjaa poimittu hakuaika yllä olevaan tekstikenttään tai kuittaa ristiriitavaroitus ennen analyysin käynnistämistä."
+      );
+      return;
+    }
 
     if (jobText.trim().length < 40) {
       setErrorMessage(
@@ -162,8 +189,78 @@ export function AnalyzeView({
     }
   }
 
+  async function executeFetchJobUrl(targetUrl: string) {
+    if (isFetchingJob || isLoading) return;
+
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
+    setIsFetchingJob(true);
+    setFetchError(null);
+    setFetchResult(null);
+    setDeadlineConflictAcknowledged(false);
+    setPendingOverwriteUrl(null);
+
+    try {
+      const response = await fetch("/api/fetch-job", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: targetUrl }),
+        signal: controller.signal,
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          payload?.error ||
+            "Ilmoituksen sisällön nouto epäonnistui. Liitä ilmoitusteksti käsin."
+        );
+      }
+
+      const fetched = payload as FetchedJobResult;
+      setJobText(fetched.extractedText);
+      setJobUrl(fetched.sourceUrl);
+      setFetchResult(fetched);
+      setDeadlineConflictAcknowledged(false);
+      setErrorMessage(null);
+      setCancelledMessage(null);
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return;
+      }
+      setFetchError(
+        err instanceof Error
+          ? err.message
+          : "Ilmoituksen nouto epäonnistui. Voit liittää ilmoitustekstin käsin."
+      );
+    } finally {
+      if (fetchAbortRef.current === controller) {
+        fetchAbortRef.current = null;
+      }
+      setIsFetchingJob(false);
+    }
+  }
+
+  function handleRequestFetchJob() {
+    if (isFetchingJob || isLoading) return;
+    const trimmedUrl = jobUrl.trim();
+    if (!trimmedUrl) {
+      setFetchError("Anna ensin työpaikkailmoituksen HTTPS-osoite.");
+      return;
+    }
+
+    setFetchError(null);
+    if (jobText.trim().length > 0) {
+      setPendingOverwriteUrl(trimmedUrl);
+      return;
+    }
+
+    void executeFetchJobUrl(trimmedUrl);
+  }
+
   function handleReset() {
-    if (coordinatorRef.current.isRunning()) {
+    if (coordinatorRef.current.isRunning() || isFetchingJob) {
       return;
     }
     setJobText("");
@@ -171,6 +268,10 @@ export function AnalyzeView({
     setResult(null);
     setErrorMessage(null);
     setCancelledMessage(null);
+    setFetchError(null);
+    setFetchResult(null);
+    setDeadlineConflictAcknowledged(false);
+    setPendingOverwriteUrl(null);
     setSavedSuccessId(null);
     setSaveNotes("");
     setAvailabilityStatus("Ei tarkistettu");
@@ -280,26 +381,248 @@ export function AnalyzeView({
             >
               Ilmoituksen URL-osoite (valinnainen)
             </label>
-            <input
-              id="job-url-input"
-              type="url"
-              value={jobUrl}
-              onChange={(e) => setJobUrl(e.target.value)}
-              placeholder="https://yritys.fi/rekry/harjoittelija"
-              className="w-full rounded-md border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
-            />
-            <p className="mt-1 text-xs text-slate-500">
-              Osoite tallennetaan vain viitteeksi. Sovellus ei avaa linkkiä
-              eikä hae sivun sisältöä.
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              <input
+                id="job-url-input"
+                type="url"
+                value={jobUrl}
+                onChange={(e) => {
+                  setJobUrl(e.target.value);
+                  setFetchError(null);
+                  setPendingOverwriteUrl(null);
+                }}
+                placeholder="https://duunitori.fi/tyopaikat/tyo/..."
+                className="flex-1 min-w-0 rounded-md border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+              />
+              <button
+                type="button"
+                onClick={handleRequestFetchJob}
+                disabled={isFetchingJob || isLoading || jobUrl.trim().length === 0}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium text-slate-800 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isFetchingJob ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin text-slate-700" />
+                    Haetaan ilmoitusta...
+                  </>
+                ) : (
+                  <>
+                    <Globe className="h-4 w-4 text-slate-700" />
+                    Hae ilmoituksen sisältö
+                  </>
+                )}
+              </button>
+            </div>
+            <p className="mt-1.5 text-xs text-slate-500">
+              Tuettu ensimmäisessä versiossa (HTTPS):{" "}
+              <span className="font-mono text-slate-600">
+                valtiolle.fi, jobly.fi, duunitori.fi, ats.talentadore.com
+              </span>
+              . Sisältö tuodaan yllä olevaan tekstikenttään tarkistettavaksi;
+              haku ei todista työpaikan olevan avoinna. Voit aina liittää tekstin
+              myös käsin.
             </p>
           </div>
+
+          {pendingOverwriteUrl && (
+            <div
+              role="alertdialog"
+              aria-label="Vahvista ilmoitustekstin korvaaminen"
+              className="rounded-md border border-amber-300 bg-amber-50 p-3.5 text-sm text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+            >
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium">
+                    Tekstikentässä on jo ilmoitustekstiä.
+                  </p>
+                  <p className="text-xs text-amber-900 mt-0.5">
+                    Korvataanko nykyinen sisältö osoitteesta haettavalla tekstillä?
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void executeFetchJobUrl(pendingOverwriteUrl)}
+                  className="px-3 py-1.5 text-xs font-medium text-white bg-amber-800 rounded-md hover:bg-amber-900 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Korvaa nykyinen teksti
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingOverwriteUrl(null)}
+                  className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Peruuta
+                </button>
+              </div>
+            </div>
+          )}
+
+          {fetchError && (
+            <div
+              role="alert"
+              className="rounded-md border border-red-200 bg-red-50 p-3.5 text-sm text-red-900 flex items-start gap-2.5"
+            >
+              <AlertCircle className="h-4 w-4 text-red-700 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-medium">Ilmoituksen nouto URL-osoitteesta epäonnistui</p>
+                <p className="text-xs text-red-800 mt-0.5">{fetchError}</p>
+              </div>
+            </div>
+          )}
+
+          {fetchResult && (() => {
+            const deadlineInfo = fetchResult.deadlineInfo;
+            const hasConflict = Boolean(deadlineInfo?.hasConflict);
+            const hasUnresolvedConflictHeader =
+              hasConflict && /Hakuaika\s*\(RISTIRIITAINEN/i.test(jobText);
+            const isHealthyComplete =
+              fetchResult.coverageStatus === "complete" &&
+              fetchResult.confidence === "high" &&
+              !hasConflict &&
+              !fetchResult.warning;
+
+            return (
+              <div
+                role="status"
+                className={`rounded-md border p-3.5 text-sm flex items-start gap-2.5 ${
+                  isHealthyComplete
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-950"
+                    : "border-amber-300 bg-amber-50 text-amber-950"
+                }`}
+              >
+                {isHealthyComplete ? (
+                  <Check className="h-4 w-4 text-emerald-700 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" />
+                )}
+                <div className="flex-1 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-medium">
+                      {hasConflict
+                        ? "Ilmoitusteksti haettu — hakuaika ristiriitainen"
+                        : fetchResult.coverageStatus === "partial"
+                        ? "Verkkonouto onnistui — osittainen ilmoitussisältö (partial)"
+                        : fetchResult.coverageStatus === "uncertain"
+                        ? "Verkkonouto onnistui — sisällön kattavuus epävarma"
+                        : "Ilmoitusteksti haettu tarkistettavaksi"}
+                      {fetchResult.title ? `: ${fetchResult.title}` : ""}
+                      {fetchResult.company ? ` (${fetchResult.company})` : ""}
+                    </p>
+                    <span className="font-mono text-xs tabular-nums opacity-80">
+                      {fetchResult.fetchMethod === "jsonld_and_html"
+                        ? "schema.org + HTML"
+                        : fetchResult.fetchMethod === "schema_org_jsonld"
+                        ? "schema.org/JobPosting"
+                        : "HTML-sisältöpoiminta"}{" "}
+                      · {formatSavedJobTimestamp(fetchResult.fetchedAt)}
+                    </span>
+                  </div>
+
+                  {hasConflict && deadlineInfo && (
+                    <div
+                      role="alert"
+                      className="rounded-md border border-amber-400 bg-white/80 p-3 text-xs text-amber-950 space-y-2"
+                    >
+                      <p className="font-semibold text-amber-950">
+                        {deadlineInfo.conflictWarning ??
+                          "Hakuaika on ristiriitainen. Tarkista oikea määräaika työnantajan alkuperäisestä ilmoituksesta."}
+                      </p>
+                      <ul className="space-y-1 text-amber-900 list-disc pl-4">
+                        {deadlineInfo.structuredDeadline && (
+                          <li>
+                            <span className="font-medium">
+                              Rakenteinen lähde ({deadlineInfo.structuredDeadline.sourceLabel}):
+                            </span>{" "}
+                            <span className="font-mono">
+                              {deadlineInfo.structuredDeadline.value}
+                            </span>
+                            {deadlineInfo.structuredDeadline.rawValue !==
+                              deadlineInfo.structuredDeadline.value && (
+                              <span className="opacity-75">
+                                {" "}
+                                ({deadlineInfo.structuredDeadline.rawValue})
+                              </span>
+                            )}
+                          </li>
+                        )}
+                        {deadlineInfo.bodyDeadline && (
+                          <li>
+                            <span className="font-medium">
+                              {deadlineInfo.bodyDeadline.sourceLabel}:
+                            </span>{" "}
+                            <span className="font-mono">
+                              {deadlineInfo.bodyDeadline.value}
+                            </span>
+                            {deadlineInfo.bodyDeadline.excerpt && (
+                              <span className="block text-[11px] opacity-85 mt-0.5">
+                                &ldquo;{deadlineInfo.bodyDeadline.excerpt}&rdquo;
+                              </span>
+                            )}
+                          </li>
+                        )}
+                      </ul>
+                      <p className="text-[11px] text-amber-900">
+                        Hakuaikaa ei ole merkitty vahvistetuksi eikä sen perusteella päätellä haun olevan avoinna. Voit muokata poimittua tekstiä yllä olevassa kentässä ennen analysointia.
+                      </p>
+                      {hasUnresolvedConflictHeader ? (
+                        <label
+                          htmlFor="deadline-conflict-ack"
+                          className="flex items-start gap-2 pt-1 cursor-pointer select-none font-medium text-amber-950"
+                        >
+                          <input
+                            id="deadline-conflict-ack"
+                            type="checkbox"
+                            checked={deadlineConflictAcknowledged}
+                            onChange={(e) => {
+                              setDeadlineConflictAcknowledged(e.target.checked);
+                              if (e.target.checked) {
+                                setErrorMessage(null);
+                              }
+                            }}
+                            className="mt-0.5 h-3.5 w-3.5 rounded border-amber-500 text-amber-900 focus:ring-amber-700"
+                          />
+                          <span>
+                            Olen huomioinut ristiriitaisen hakuajan ennen analyysiä (lähteiden ero säilytetään analyysissä).
+                          </span>
+                        </label>
+                      ) : (
+                        <p className="text-[11px] font-medium text-emerald-900">
+                          Poimittua tekstiä on muokattu; voit käynnistää analyysin tarkistamallasi tekstillä.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {fetchResult.warning && !hasConflict ? (
+                    <p className="text-xs font-medium text-amber-900">
+                      {fetchResult.warning}
+                    </p>
+                  ) : !hasConflict ? (
+                    <p className="text-xs text-emerald-900">
+                      Tarkista teksti yllä olevassa kentässä ja käynnistä analyysi
+                      painamalla &quot;Analysoi ilmoitus&quot;.
+                    </p>
+                  ) : null}
+
+                  {fetchResult.coverageSummary && (
+                    <p className="text-xs opacity-85">
+                      {fetchResult.coverageSummary}
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           <div className="flex flex-wrap items-center justify-end gap-2.5 pt-1">
             {(jobText || jobUrl || result) && (
               <button
                 type="button"
                 onClick={handleReset}
-                disabled={isLoading}
+                disabled={isLoading || isFetchingJob}
                 className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
               >
                 Tyhjennä
@@ -327,7 +650,7 @@ export function AnalyzeView({
             ) : (
               <button
                 type="submit"
-                disabled={jobText.trim().length === 0}
+                disabled={isFetchingJob || jobText.trim().length === 0}
                 className="inline-flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-slate-900 rounded-md hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Sparkles className="h-4 w-4" />

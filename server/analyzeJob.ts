@@ -21,7 +21,8 @@ EHDOTTOMAT TURVALLISUUS- JA LAATUSÄÄNNÖT:
 9. PAKOLLISET HAKUVAIHEET JA MONIOSAISET TEHTÄVÄT: Poimi kaikki pakolliset hakemisen vaiheet ja ennakkotehtävät (esim. videotehtävä) extracted.applicationSteps -listaan. Jos tehtävässä on useita osia (esim. esittele jo tehty AI-projekti JA oma unelmasi tekoälyn käytöstä), erittele jokainen osa selkeästi parts-listaan. Lisää candidateCaution-varoitus, jos hakijan täytyy varoa esittämästä ohjattua opiskeluharjoitusta tai keskeneräistä työtä valmiina projektina.
 10. EI TUPLALASKENTAA: Sama puuttuva taito tai kokemus saa esiintyä significantGaps-listassa enintään kerran. Älä jaa yhtä puutetta kahdeksi erilliseksi puutteeksi.
 11. OBJEKTIIVISUUS JA KIELELLINEN SÄÄNTÖ: Säilytä kriittinen, näyttöön perustuva arviointi; älä liioittele hakijan kilpailukykyä. Kirjoita kaikki analyysitekstit luonnollisella suomen kielellä ja säilytä suorat lainaukset (evidence / excerpt) alkuperäiskielellä.
-12. SUOSITUSKATEGORIA: Valitse täsmälleen yksi: "Ensisijainen hakukohde", "Harkinnan arvoinen", "Matala prioriteetti" tai "Jätä väliin".`;
+12. RISTIRIITAINEN HAKUAIKA: Jos ilmoitusteksti ja rakenteinen metadata (esim. schema.org/JobPosting validThrough vs. varsinainen ilmoitusteksti tai "Hakuaika (RISTIRIITAINEN...)" -rivi) sisältävät eri hakuajat, ÄLÄ koskaan valitse kumpaakaan tai myöhäisempää päivämäärää vahvistetuksi äläkä päättele haun olevan avoinna. Kirjoita extracted.deadline -kenttään selkeästi, että hakuaika on ristiriitainen ja mainitse molemmat lähteet päivämäärineen (esim. "Ristiriitainen (tarkistettava): schema.org/JobPosting ... vs. ilmoitusteksti ..."), ja nosta hakuajan varmistaminen esiin practicalConsiderations.scheduleAndStart- sekä skillsComparison.unknownInformation-kentissä.
+13. SUOSITUSKATEGORIA: Valitse täsmälleen yksi: "Ensisijainen hakukohde", "Harkinnan arvoinen", "Matala prioriteetti" tai "Jätä väliin".`;
 
 const EXTRACTED_ITEM_SCHEMA = {
   type: Type.OBJECT,
@@ -413,7 +414,11 @@ export async function analyzeJobPosting(params: {
       }
 
       const parsedJson: unknown = JSON.parse(rawText);
-      return validateAndNormalizeAnalysis(parsedJson, params.jobUrl);
+      return validateAndNormalizeAnalysis(
+        parsedJson,
+        params.jobUrl,
+        params.jobText
+      );
     } catch (err) {
       if (isAbortError(err, params.signal)) {
         throw new AnalysisError("Analyysi keskeytetty.", 499);

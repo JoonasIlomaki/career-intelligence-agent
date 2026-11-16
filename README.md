@@ -24,7 +24,7 @@ Sovellus on **päätöksenteon apuväline**. Se ei vahvista työnantajan tietoja
 
 ### Työpaikkailmoituksen analysointi
 
-Käyttäjä liittää työpaikkailmoituksen tekstin ja voi lisätä ilmoituksen URL-osoitteen viitteeksi. Gemini vertaa tekstiä tallennettuun hakijaprofiiliin ja tuottaa rakenteisen analyysin, joka sisältää muun muassa:
+Käyttäjä voi liittää työpaikkailmoituksen tekstin käsin tai hakea sen tuetusta HTTPS-osoitteesta erillisellä **Hae ilmoituksen sisältö** -toiminnolla muokattavaan tekstikenttään ja käynnistää Gemini-analyysin erikseen. Gemini vertaa tekstiä tallennettuun hakijaprofiiliin ja tuottaa rakenteisen analyysin, joka sisältää muun muassa:
 
 - tehtävän perustiedot, työtehtävät ja työnantajan vaatimukset;
 - pakolliset kelpoisuusehdot ja niiden täyttymisen;
@@ -35,7 +35,14 @@ Käyttäjä liittää työpaikkailmoituksen tekstin ja voi lisätä ilmoituksen 
 
 Suosituskategoriat ovat **Ensisijainen hakukohde**, **Harkinnan arvoinen**, **Matala prioriteetti** ja **Jätä väliin**.
 
-**Rajoitus:** Sovellus ei nykyisessä versiossa avaa ilmoituksen URL-osoitetta eikä tarkista hakuilmoituksen ajantasaisuutta verkkosivulta. Arvio perustuu käyttäjän liittämään tekstiin.
+### URL-pohjainen ilmoituksen lukeminen (Job URL Import)
+
+- **Tuetut portaalit:** palvelinpuolen nouto (`POST /api/fetch-job`, `server/fetchJob.ts`) on rajattu sallittuihin HTTPS-isäntänimiin (`valtiolle.fi`, `www.valtiolle.fi`, `jobly.fi`, `www.jobly.fi`, `duunitori.fi`, `www.duunitori.fi` ja `ats.talentadore.com`).
+- **Poimintamenetelmät ja kattavuus:** noutaja hyödyntää sekä rakenteista `schema.org/JobPosting`-dataa että HTML-sisältöalueen jäsentämistä (`schema_org_jsonld`, `jsonld_and_html`, `html_fallback`) ja ilmoittaa poiminnan kattavuustilan (`complete`, `partial` tai `uncertain`). Lyhyt rakenteinen tiivistelmä ei syrjäytä kattavaa HTML-ilmoitusta.
+- **Hakuajan ristiriitojen ja kellonaikojen tarkistus:** rakenteisten metatietojen (`validThrough`) ja varsinaisen ilmoitustekstin hakuaikoja verrataan `Europe/Helsinki`-aikavyöhykkeessä. Kaksi eksplisiittistä kellonaikaa verrataan täsmällisesti ilman yleistä tuntitoleranssia tai `23:59`-oletusajan ohittamista. Ristiriitaiset ajat merkitään (`Hakuaika (RISTIRIITAINEN – tarkistettava)`) ja käyttöliittymä edellyttää käyttäjältä joko tekstin tarkistamista/korjaamista tai ristiriitavaroituksen kuittaamista ennen analyysiä.
+- **Totuudenmukainen varmistusilmoitus:** analyysin `urlVerificationNotice` kuvaa rehellisesti, että analyysi perustuu syötettyyn tai erillisellä URL-noudolla haettuun tekstiin eikä teksti, onnistunut URL-nouto tai viite-URL yksinään todista, että haku on yhä avoinna.
+
+**Rajoitus:** Jos ilmoitussivu vaatii kirjautumista, rakentuu täysin selainpuolisella JavaScriptillä tai sijaitsee sallittujen portaalien ulkopuolella, ilmoitusteksti liitetään tekstikenttään käsin. Haun todellinen voimassaolo vahvistetaan edelleen manuaalisesti.
 
 ### Hakijaprofiili
 
@@ -74,6 +81,12 @@ Lähdekoodissa analyysimallin tunniste on `gemini-4-hydrogen`, ja analyysikutsul
 ```text
 Käyttäjä / React-käyttöliittymä
         |
+        +--> (Valinnainen URL-tuonti: vain { url }, ei hakijaprofiilia)
+        |       POST /api/fetch-job (server/fetchJob.ts)
+        |       -> SSRF-/allowlist-/DNS-/TLS-tarkistettu HTTPS-nouto
+        |       -> JSON-LD + HTML-poiminta + hakuajan ristiriitatarkistus
+        |       -> Teksti ja varoitukset muokattavaan tekstikenttään
+        |
         | Ilmoitusteksti + URL-viite + hakijaprofiili
         v
 POST /api/analyze  (Express / server.ts)
@@ -101,26 +114,26 @@ React: analyysin näyttäminen
 
 ### Keskeiset tiedostot
 
-- `server.ts` – Express-palvelimen käynnistys, `GET /api/health`, `POST /api/analyze`, pyynnön validointi ja yhteyden katkeamisen käsittely.
+- `server.ts` – Express-palvelimen käynnistys, `GET /api/health`, `POST /api/analyze`, `POST /api/fetch-job`, pyyntöjen validointi ja yhteyden katkeamisen käsittely.
+- `server/fetchJob.ts` – SSRF-suojattu ja DNS-sidottu HTTPS-nouto sallituista työpaikkaportaaleista, JSON-LD- ja HTML-sisällön poiminta, kattavuusarviointi sekä aikavyöhyke- ja kellonaikatarkka hakuajan ristiriita-arviointi.
 - `server/analyzeJob.ts` – hakijariippumaton analyysin ohjeistus (`SYSTEM_INSTRUCTION`), dynaaminen `buildPrompt()` annetulle profiilille, Gemini-kutsu, keskeytys ja analyysin virheenkäsittely.
-- `src/lib/validation.ts` – hakijaprofiilin, analyysituloksen, tallennettujen hakukohteiden ja JSON-varmuuskopion Zod-skeemat sekä normalisointi.
+- `src/lib/validation.ts` – hakijaprofiilin, URL-noutopyynnön, analyysituloksen, tallennettujen hakukohteiden ja JSON-varmuuskopion Zod-skeemat sekä normalisointi (mukaan lukien `deduplicateGaps()`, hakuajan ristiriitojen säilytys ja `urlVerificationNotice`).
 - `src/lib/storage.ts` – `localStorage`-tallennus ja -luku (tallennettu profiili ohittaa oletusprofiilin) sekä JSON-varmuuskopion muodostus ja jäsentäminen.
-- `src/lib/analysisRunner.ts` – käyttöliittymän analyysipyyntöjen koordinointi ja myöhästyneiden tulosten käsittely (testien perusteella).
-- `src/lib/availability.ts` – soveltuvuuden ja manuaalisesti tarkistetun hakutilanteen erottelu (testien perusteella).
-- `src/lib/timestamps.ts` – tallennus- ja muokkausaikaleimojen käsittely (testien perusteella).
+- `src/lib/analysisRunner.ts` – käyttöliittymän analyysipyyntöjen koordinointi ja myöhästyneiden tulosten käsittely.
+- `src/lib/availability.ts` – soveltuvuuden ja manuaalisesti tarkistetun hakutilanteen erottelu.
+- `src/lib/timestamps.ts` – tallennus- ja muokkausaikaleimojen käsittely.
 - `src/types/career.ts` – tietotyyppien määrittely.
 - `src/data/defaultProfile.ts` – kuvitteellinen suomalaisen IT-opiskelijan oletusesimerkkiprofiili (käytössä vain, kun tallennettua profiilia ei ole).
-- `tests/regression.test.ts` – automaattiset regressiotestit.
+- `tests/regression.test.ts` – automaattiset regressio- ja integraatiotestit.
 - `src/components/` ja `App.tsx` – React-käyttöliittymä.
-
-Kaikkia yllä mainittuja tiedostoja ei ole vielä luettu kokonaisuudessaan. Merkityt kuvaukset perustuvat niiden käyttöön tarkastetuissa tiedostoissa ja testeissä.
 
 ### Rajapinnat
 
 - `GET /api/health` palauttaa vastauksen `{ "status": "ok" }`.
+- `POST /api/fetch-job` vastaanottaa JSON-olion `{ "url": "https://..." }` (ilman hakijaprofiilia) ja palauttaa `FetchedJobResult`-rakenteen (`url`, `canonicalUrl`, `host`, `extractionMethod`, `coverageStatus`, `text`, `warnings`, `deadlineInfo` ym.).
 - `POST /api/analyze` vastaanottaa JSON-olion, jossa ovat `jobText`, `jobUrl` ja `profile`, ja palauttaa onnistumisessa `{ "analysis": ... }`.
 
-`jobText`-kentän sallittu pituus on 40–30 000 merkkiä. `jobUrl`-kentän enimmäispituus on 2 048 merkkiä. Expressin JSON-pyynnön kokoraja on 1 Mt.
+`jobText`-kentän sallittu pituus on 40–30 000 merkkiä. `jobUrl`- ja `url`-kenttien enimmäispituus on 2 048 merkkiä. Expressin JSON-pyynnön kokoraja on 1 Mt, ja URL-nouto rajaa ladattavan vastauksen enintään 1,5 megatavuun.
 
 ## 5. Kehityskäyttö ja komennot
 
@@ -155,11 +168,19 @@ Gemini API -avain määritetään **palvelimen ympäristömuuttujaksi** nimellä
 - JSON-varmuuskopion vienti sekä onnistunut palautus erilliseen incognito-istuntoon.
 - Analyysin keskeyttäminen käyttöliittymästä.
 
-### Regressiotestit
+- Aiemmin raportoidut URL-tuonnin käyttöliittymäkokeilut portaaleilla Valtiolle.fi, Jobly.fi ja Duunitori.fi, joiden havaintojen pohjalta portaalisiivous, kattavuusarviointi ja hakuajan ristiriitatarkistus on toteutettu.
 
-Viimeisimmän raportoidun testiajon mukaan `npm test` läpäisi **22/22 testiä**, `npm run lint` läpäisi TypeScript-tyyppitarkistuksen ja `npm run build` onnistui. Tuloksia ei ole toistettu erillisessä ulkoisessa CI-ympäristössä.
+### Regressio- ja integraatiotestit
 
-Testisarja kattaa muun muassa merkittävien osaamispuutteiden ja valinnaisten oppimismahdollisuuksien erottelun (`deduplicateGaps()`-korjaus, jossa pakollinen vaatimus tai kelpoisuuspuute säilyy vaikka teknologia mainittaisiin oppimismahdollisuutena), harjoittelun opinnollistamisen käsittelyn, analyysin keskeytyksen ja myöhäisten vastausten ohittamisen, tallennus- ja muokkausaikaleimojen säilymisen sekä sen, että tallennettu profiili ohittaa kuvitteellisen oletusprofiilin ja `SYSTEM_INSTRUCTION` pysyy hakijariippumattomana. Korjattu lähdekoodi on tarkistettava erikseen, jos tarvitaan riippumaton koodikatselmointi.
+Viimeisimmän varmistetun testiajon mukaan `npm test` läpäisi **42/42 testiä**, `npm run lint` (`tsc --noEmit`) läpäisi TypeScript-tyyppitarkistuksen virheettä ja `npm run build` onnistui. Testit suoritetaan täysin ilman ulkoisia verkkopyyntöjä paikallisessa kehitysympäristössä.
+
+Testisarja kattaa muun muassa:
+- osaamispuutteiden ja oppimismahdollisuuksien erottelun (`deduplicateGaps()`), harjoittelun opinnollistamisen, analyysin keskeytyksen ja aikaleimat;
+- kuvitteellisen oletusprofiilin sekä hakijariippumattoman `SYSTEM_INSTRUCTION`-ohjeen;
+- URL-validoinnin, JSON-LD- ja HTML-sisällönpoiminnan, kattavuusluokituksen (`complete` / `partial` / `uncertain`), portaalikohtaisen siivouksen sekä `Europe/Helsinki`-aikavyöhykkeen ja eksplisiittisten kellonaikojen ristiriitavertailun (`14:00` vs `16:00`, `14:00` vs `23:59`, `23:59` vs `16:15`, kesä- ja talviaika);
+- `urlVerificationNotice`-tekstin totuudenmukaisen normalisoinnin sekä URL-kohtaisissa että manuaalisissa analyyseissä;
+- **eristetyt todellisen `node:https`-kuljetuskerroksen integraatiotestit** (`executePinnedHttpsGet` paikallista itseallekirjoitettua testipalvelinta vasten): IP-osoitteen sidonta `Host`- ja SNI-otsikoilla, epäluotetun tai väärän isäntänimen TLS-varmenteen hylkäys (`rejectUnauthorized: true`), `302`-uudelleenohjauksen esto, raakavasteen ja puretun gzip-vastauksen kokoraja, HTTPS-aikakatkaisu, `AbortSignal`-keskeytys sekä DNS-haun aikakatkaisu (`504 DNS_TIMEOUT`) ja DNS-keskeytys (`499 ABORTED`);
+- **simuloidut/mockatut yksikkötestit**: `fetchJobFromUrl`-kutsut sallitun osoitelistan ulkopuolisilla/yksityisillä/IANA-varatuilla IP-avaruuksilla ja mockatuilla DNS-/HTTP-riippuvuuksilla.
 
 ### Prompt injection -käyttöliittymätestit
 
@@ -182,25 +203,26 @@ Nämä ovat onnistuneita yksittäisiä testejä, **eivät todiste aukottomasta p
 - Analyysipyyntö validoidaan Zodilla ja sen kokoa rajataan.
 - Geminiä pyydetään palauttamaan rakenteinen JSON-vastaus, joka validoidaan uudelleen palvelimella.
 - Ilmoitusteksti rajataan ohjeistuksessa epäluotettavaksi aineistoksi.
-- Keskeytettyjen pyyntöjen myöhästyneet tulokset pyritään jättämään käsittelemättä.
+- URL-nouto (`server/fetchJob.ts`) käyttää SSRF- ja kuljetusturvasuojauksia: vain sallittujen portaalien HTTPS-osoitteet ilman käyttäjätunnuksia tai ei-oletusportteja; default-deny-tarkistus sallii vain aidosti julkiset IPv4- ja IPv6-osoitteet (estäen mm. RFC 1918-, CGNAT-, loopback-, link-local-/metadata-, TEST-NET-1/2/3-, IANA-erityis-, dokumentaatio-, NAT64-, Teredo-, 6to4- ja IPv4-muunnetut osoitteet); DNS-haulla on 5 s aikakatkaisu ja ratkaistu IP sidotaan suoraan yhteyteen (`lookup`) DNS rebinding -hyökkäyksiä vastaan; TLS-varmenteen ja isäntänimen tarkistus (`rejectUnauthorized: true`) on pakotettu; HTTP-uudelleenohjaukset estetään (`redirect: manual`); vain HTML/XHTML-sisältö hyväksytään; siirretty ja purettu koko rajataan 1,5 megatavuun; ja pyyntöjä voidaan keskeyttää `AbortSignal`-signaalilla.
+- Keskeytettyjen pyyntöjen myöhästyneet tulokset jätetään käsittelemättä.
 - Sovellus ei automaattisesti lähetä hakemuksia työnantajille.
 
 ### Tunnetut rajoitukset ja riskit
 
-- **Prompt injection:** Tekstirajaukset ja kielimallille annetut ohjeet eivät muodosta varmaa turvarajaa.
-- **Tietojen alkuperä:** Käyttäjän liittämää ilmoitustekstiä ja lainauksia ei tarkisteta automaattisesti työnantajan verkkosivulta. Lainausten täsmällistä vastaavuutta lähdetekstiin ei ole vahvistettu ohjelmallisesti.
-- **Henkilötiedot:** Koko analysoitava hakijaprofiili sekä ilmoitusteksti välitetään Gemini API:lle. Profiili ja tallennetut hakukohteet säilyvät selaimen `localStorage`-tallennustilassa; JSON-varmuuskopio sisältää samat tiedot luettavassa muodossa. Käyttäjän tulee huomioida käyttämänsä API-palvelun tiedonkäsittelyehdot.
-- **Julkinen rajapinta:** Tarkastetussa `server.ts`-tiedostossa ei ole käyttäjätunnistusta eikä API-pyyntöjen määrän rajoittamista. Mahdolliset käyttöympäristön erilliset suojaukset on tarkistettava.
+- **Prompt injection:** Tekstirajaukset ja kielimallille annetut ohjeet eivät muodosta varmaa turvarajaa. Myös verkkosivulta noudettu ilmoitusteksti on epäluotettavaa syötettä.
+- **Tietojen alkuperä ja haun ajantasaisuus:** Käyttäjän liittämää tai URL-noudolla tuotua tekstiä ja lainauksia ei vahvisteta jatkuvasti elävää hakulomaketta vasten, eikä onnistunut URL-nouto yksinään todista haun olevan avoinna. Lainausten täsmällistä vastaavuutta lähdetekstiin ei ole vahvistettu ohjelmallisesti.
+- **Henkilötiedot:** Koko analysoitava hakijaprofiili sekä ilmoitusteksti välitetään Gemini API:lle (`POST /api/fetch-job` ei välitä hakijaprofiilia). Profiili ja tallennetut hakukohteet säilyvät selaimen `localStorage`-tallennustilassa; JSON-varmuuskopio sisältää samat tiedot luettavassa muodossa. Käyttäjän tulee huomioida käyttämänsä API-palvelun tiedonkäsittelyehdot.
+- **Julkinen rajapinta:** Tarkastetussa `server.ts`-tiedostossa ei ole käyttäjätunnistusta eikä API-pyyntöjen määrän rajoittamista (`rate limiting`). Mahdolliset käyttöympäristön erilliset suojaukset on tarkistettava.
 - **Virheviestit:** Analyysipalvelin voi palauttaa käyttöliittymälle ulkoisen palvelun tai jäsentämisen teknisiä virheviestejä. Niiden yksityiskohdat kannattaa pitää palvelinlokeissa ennen julkaisua.
-- **Syötteet ja URL-haku:** Nykyinen URL-kenttä on vain viite. Jos URL-osoitteita ryhdytään myöhemmin hakemaan palvelimelta, tarvitaan erillinen SSRF-suojaus, osoite- ja uudelleenohjaustarkistukset sekä lähteen jäljitettävyys.
+- **URL-noudon rajat:** Koska portaalit voivat muuttaa HTML-/JSON-LD-rakennettaan milloin tahansa ja osa sisällöstä voi latautua vain JavaScriptillä tai kirjautumisen takana, poiminta voi jäädä osittaiseksi (`partial`) tai epäonnistua, jolloin teksti on tarkistettava tai liitettävä käsin.
 - **Tallennus:** Selainkohtainen `localStorage` ei tarjoa automaattista varmuuskopiointia eikä laitteiden välistä synkronointia.
 
 Sovellusta tulee käsitellä **henkilökohtaisena prototyyppinä**, ei luottamuksellisia tietoja käsittelevänä julkisena monikäyttäjäpalveluna.
 
 ## 8. Tunnetut toiminnalliset rajoitukset
 
-1. Työpaikkailmoitus on liitettävä tekstinä; URL-osoitteesta ei haeta sisältöä.
-2. Haun voimassaolo tarkistetaan ja merkitään manuaalisesti.
+1. URL-nouto tukee vain määriteltyjä suomalaisia työpaikkaportaaleja (`valtiolle.fi`, `jobly.fi`, `duunitori.fi`, `ats.talentadore.com`); muut sivustot, kirjautumista vaativat sivut ja puhtaat JavaScript-sovelluskuoret edellyttävät tekstin liittämistä käsin.
+2. Haun voimassaolo ja poimitut ristiriitaiset hakuajat tarkistetaan ja vahvistetaan manuaalisesti.
 3. AI-arviot voivat sisältää virheellisiä luokitteluja tai päätelmiä, vaikka JSON olisi validia.
 4. Sovellus ei vahvista tutkintoharjoittelun hyväksyttävyyttä; päätös kuuluu oppilaitokselle.
 5. Sovellus ei vielä itsenäisesti etsi uusia työpaikkoja tai suorita ulkoisten työkalujen monivaiheisia tehtäviä. Se on tarkemmin kuvattuna **AI-avusteinen analyysi- ja seurantatyökalu** kuin autonominen agentti.
@@ -208,13 +230,12 @@ Sovellusta tulee käsitellä **henkilökohtaisena prototyyppinä**, ei luottamuk
 
 ## 9. Jatkokehitysideoita
 
-**Seuraava hyödyllinen ominaisuus:** työpaikkailmoituksen haku suoraan käyttäjän antamasta URL-osoitteesta. Toteutuksessa tulee suunnitella turvallinen sivun nouto, tekstin poiminta, lähdetiedon säilyttäminen ja haun ajantasaisuuden erillinen todentaminen.
+**Seuraavat luontevat jatkokehityskohteet:**
 
-Muita mahdollisia jatkokehityskohteita:
-
+- uusien portaalisovittimien lisääminen URL-noutoon sekä elävien portaalitestien ylläpito;
+- rajapinnan autentikointi, käyttörajoitukset (`rate limiting`) ja turvallisemmat virheilmoitukset ennen mahdollista julkaisua;
 - lähdelainausten automaattinen vastaavuustarkistus;
 - laajempi prompt injection -regressiotestiaineisto;
-- rajapinnan autentikointi, käyttörajoitukset ja turvallisemmat virheilmoitukset ennen julkaisua;
 - tallennettujen kohteiden hakeminen, suodattaminen ja järjestäminen;
 - kustannusten ja syötettävän datamäärän optimointi;
 - kattava riippumaton koodikatselmointi ja testiympäristön dokumentointi.
@@ -238,4 +259,4 @@ Suuri osa sovelluksen varsinaisesta lähdekoodista on syntynyt Google AI Studion
 
 ---
 
-**Dokumentoinnin seuraava tarkistuspiste:** pidä tämä README ajan tasalla lähdekoodin, regressiotestien (`22/22`) ja julkaisuympäristön vaatimusten kanssa aina, kun toiminnallisuus, tietoturvakäytännöt tai käyttöympäristö muuttuvat olennaisesti.
+**Dokumentoinnin seuraava tarkistuspiste:** pidä tämä README ajan tasalla lähdekoodin, regressio- ja integraatiotestien (`42/42`) ja julkaisuympäristön vaatimusten kanssa aina, kun toiminnallisuus, tietoturvakäytännöt tai käyttöympäristö muuttuvat olennaisesti.
