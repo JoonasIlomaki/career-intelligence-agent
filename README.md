@@ -1,10 +1,56 @@
 # Career Intelligence Agent
 
-**Gemini-pohjainen työpaikkailmoitusten analysointi- ja hakukohteiden seurantatyökalu**
+**AI-avusteinen työnhaku- ja urapäätösten tukisovellus**
 
-> **Projektin tila:** MVP-versio 0.3.1 (Job Discovery MVP:n laadunparannukset ja korjaukset versioon 0.3). Sovellusta ei ole arvioitu tuotantovalmiiksi eikä julkaistu julkisena palveluna.
->
-> **Dokumentaation tilanne:** 17.11.2026. Tiedot perustuvat tarkasteltuihin lähdekooditiedostoihin, käyttöliittymä- ja komentorivitesteihin sekä aiempaan erilliseen elävien ATS-rajapintojen tarkistusajoon.
+React · TypeScript · Node.js · Express · Google Gemini · Zod
+
+**Tila:** MVP 0.3.1 | Henkilökohtainen oppimis- ja portfoliohanke
+
+## Portfolioesittely
+
+Career Intelligence Agent on kehittämäni AI-avusteinen sovellus, joka auttaa löytämään IT- ja kyberturvallisuusalan työpaikkoja, arvioimaan niiden soveltuvuutta hakijan osaamiseen sekä seuraamaan kiinnostavia hakukohteita.
+
+Projektin lähtökohtana oli todellinen ongelma: työpaikkailmoitusten etsiminen, vaatimusten tulkitseminen ja eri vaihtoehtojen vertaileminen vie paljon aikaa.
+
+### Keskeiset ominaisuudet
+
+- **Job Discovery:** Käyttäjän käynnistämä työpaikkahaku julkisista Ashby-, Greenhouse- ja Lever-rekrytointirajapinnoista.
+- **AI-analyysi:** Google Gemini vertaa ilmoituksen vaatimuksia hakijaprofiiliin ja tuottaa perustellun soveltuvuusarvion.
+- **Selitettävä arviointi:** Sovellus erottaa pakolliset vaatimukset, toivotun osaamisen ja epävarmat tiedot.
+- **Hakukohteiden hallinta:** Työpaikkojen tallennus, vertailu, tilaseuranta ja JSON-varmuuskopiot.
+- **Tietoturva:** Palvelinpuolinen API-avainten käsittely, Zod-validointi, rajatut HTTPS-noudot, SSRF-suojaukset ja epäluotettavan ilmoitustekstin käsittely.
+
+### Oma roolini ja kehitysprosessi
+
+Projekti on toteutettu iteratiivisesti ja AI-avusteisesti Google AI Studio Build -ympäristössä.
+
+Oma työni on painottunut ongelman määrittelyyn, toiminnallisiin ja tietoturvavaatimuksiin, kehitysratkaisujen arviointiin, testitapausten suunnitteluun, käytännön testaukseen sekä havaittujen virheiden järjestelmälliseen korjaamiseen.
+
+Suuri osa varsinaisesta lähdekoodista on tuotettu tekoälyn avustamana. Projekti osoittaa erityisesti kykyäni ohjata AI-avusteista ohjelmistokehitystä, arvioida teknisiä ratkaisuja kriittisesti ja varmistaa niiden toimintaa.
+
+### Testaus ja nykytila
+
+- **56/56** automaattista regressiotestiä läpäisty Google AI Studion raportin mukaan.
+- TypeScript-tarkistus ja Vite-build läpäisty Google AI Studion raportin mukaan.
+- **10/10** manuaalista käyttöliittymätestiä läpäisty.
+- Lähdekoodia on katselmoitu erikseen, ja kehitystyössä on käytetty GitHubin haaroja ja Pull Request -menettelyä.
+
+**Rajoitukset:** Sovellus on henkilökohtainen MVP, ei tuotantovalmis tai julkisesti ylläpidetty verkkopalvelu. Työpaikkahaku kattaa tällä hetkellä kolme valittua työnantajalähdettä, joista Lever-yhteydessä on havaittu ongelmia. Sovellus ei hae työpaikkoja automaattisesti taustalla eikä lähetä työhakemuksia.
+
+## Project overview (English)
+
+Career Intelligence Agent is an AI-assisted job discovery and career decision-support application developed as a personal learning and portfolio project.
+
+It combines public recruitment APIs, explainable rule-based filtering, Google Gemini analysis and job application tracking.
+
+The project focuses on secure API integration, structured data validation, transparent uncertainty handling and regression testing.
+
+**My contribution:** I have led the project through requirements definition, AI-assisted development in Google AI Studio Build, security-focused design decisions, iterative testing, critical evaluation and quality assurance. Much of the application code was generated with AI assistance.
+
+**Current status:** Version 0.3.1 MVP. The source code is public, but the application is not deployed as a public service or assessed as production-ready.
+
+---
+
 
 ## 1. Projektin tavoite
 
