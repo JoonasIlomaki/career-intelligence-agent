@@ -151,8 +151,9 @@ export function AnalyzeView({
 
     const needsConfirm = shouldConfirmDiscoveryTransfer({
       isLoading: isLoading || coordinatorRef.current.isRunning(),
-      isFetchingJob,
+      isFetchingJob: isFetchingJob || fetchAbortRef.current !== null,
       jobText,
+      jobUrl,
       hasResult: result !== null,
     });
 
@@ -168,6 +169,7 @@ export function AnalyzeView({
     isLoading,
     isFetchingJob,
     jobText,
+    jobUrl,
     result,
     onConsumeDiscoveryTransfer,
   ]);
@@ -263,9 +265,15 @@ export function AnalyzeView({
   }
 
   async function executeFetchJobUrl(targetUrl: string) {
-    if (isFetchingJob || isLoading) return;
+    if (
+      isFetchingJob ||
+      isLoading ||
+      coordinatorRef.current.isRunning() ||
+      fetchAbortRef.current !== null
+    ) {
+      return;
+    }
 
-    fetchAbortRef.current?.abort();
     const controller = new AbortController();
     fetchAbortRef.current = controller;
 
@@ -283,7 +291,15 @@ export function AnalyzeView({
         signal: controller.signal,
       });
 
+      if (controller.signal.aborted || fetchAbortRef.current !== controller) {
+        return;
+      }
+
       const payload = await response.json();
+      if (controller.signal.aborted || fetchAbortRef.current !== controller) {
+        return;
+      }
+
       if (!response.ok) {
         throw new Error(
           payload?.error ||
@@ -298,8 +314,13 @@ export function AnalyzeView({
       setDeadlineConflictAcknowledged(false);
       setErrorMessage(null);
       setCancelledMessage(null);
+      setActiveTransferBanner(null);
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
+      if (
+        controller.signal.aborted ||
+        fetchAbortRef.current !== controller ||
+        (err instanceof Error && err.name === "AbortError")
+      ) {
         return;
       }
       setFetchError(
@@ -310,8 +331,8 @@ export function AnalyzeView({
     } finally {
       if (fetchAbortRef.current === controller) {
         fetchAbortRef.current = null;
+        setIsFetchingJob(false);
       }
-      setIsFetchingJob(false);
     }
   }
 

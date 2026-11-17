@@ -2,9 +2,9 @@
 
 **Gemini-pohjainen työpaikkailmoitusten analysointi- ja hakukohteiden seurantatyökalu**
 
-> **Projektin tila:** MVP-versio 0.3 (Job Discovery MVP lisätty analyysi- ja seurantatyökalun rinnalle). Sovellusta ei ole arvioitu tuotantovalmiiksi eikä julkaistu julkisena palveluna.
+> **Projektin tila:** MVP-versio 0.3.1 (Job Discovery MVP:n laadunparannukset ja korjaukset versioon 0.3). Sovellusta ei ole arvioitu tuotantovalmiiksi eikä julkaistu julkisena palveluna.
 >
-> **Dokumentaation tilanne:** 17.11.2026. Tiedot perustuvat tarkasteltuihin lähdekooditiedostoihin, käyttöliittymä- ja komentorivitesteihin sekä erilliseen elävien ATS-rajapintojen tarkistusajoon.
+> **Dokumentaation tilanne:** 17.11.2026. Tiedot perustuvat tarkasteltuihin lähdekooditiedostoihin, käyttöliittymä- ja komentorivitesteihin sekä aiempaan erilliseen elävien ATS-rajapintojen tarkistusajoon.
 
 ## 1. Projektin tavoite
 
@@ -39,9 +39,13 @@ Suosituskategoriat ovat **Ensisijainen hakukohde**, **Harkinnan arvoinen**, **Ma
 
 - **Käyttäjän käynnistämä haku:** **Löydä työpaikkoja** -välilehti käynnistää manuaalisesti `POST /api/discover-jobs` -haun ilman ajastettua taustahakua tai automaattista hakemusten lähettämistä.
 - **Ensimmäisen version työnantajalähderekisteri:** Kuratoitu ja modulaarinen rekisteri (`server/jobDiscovery/registry.ts`) tukee ensimmäisessä versiossa kolmea maksutonta julkista ATS GET -rajapintaa: **Ashby** (`hoxhunt` / `api.ashbyhq.com`), **Greenhouse** (`smartlyio` / `boards-api.greenhouse.io`) sekä **Lever** (`netlight` / `api.lever.co`, sovitin tukee myös `api.eu.lever.co`-osoitetta).
-- **Normalisointi, puhdistus ja kaksoiskappaleiden poisto:** Ulkoisen HTML- tai entiteettikoodatun kuvauksen vaaralliset tunnisteet (`<script>`, `<style>`, `<iframe>`, tapahtumankäsittelijät) poistetaan ja sisältö muunnetaan puhtaaksi tekstiksi (`sanitizeExternalHtmlToPlainText`). Kaksoiskappaleet yhdistetään lähde-ID:n, normalisoidun URL:n tai tarkan yritys+nimike+sijainti-yhdistelmän perusteella ilman, että eri kaupungeissa olevia samannimisiä rooleja yhdistetään virheellisesti.
+- **Normalisointi, puhdistus ja kaksoiskappaleiden käsittely:** Ulkoisen HTML- tai entiteettikoodatun kuvauksen vaaralliset tunnisteet (`<script>`, `<style>`, `<iframe>`, tapahtumankäsittelijät) poistetaan ja sisältö muunnetaan puhtaaksi tekstiksi (`sanitizeExternalHtmlToPlainText`). Automaattinen yhdistäminen tehdään vain vahvoilla avaimilla (`source + employer + sourceJobId` tai normalisoitu `jobUrl`), jolloin puuttuvalla URL-osoitteella tai eri lähde-ID:llä olevia saman nimikkeen ja sijainnin rooleja ei poisteta vahingossa (epäillyt kaksoiskappaleet merkitään vain tarkistushuomioksi).
+- **Sijainti-, maa-, sertifikaatti- ja aikarajaluokittelun tarkennukset (0.3.1):**
+  - `Suomi`/`Finland`-sijaintihaku kattaa kaikki vahvistetut kotimaiset kohteet; tarkka kaupunkihaku (esim. `Helsinki`) pysyy tarkkana eikä laajene muihin Uudenmaan kuntiin, kun taas `Uusimaa` kattaa koko maakunnan. Ulkomainen maakoodi (esim. `DE`) estää ristiriitaisen kohteen tulkitsemisen varmaksi kotimaiseksi osumaksi, ja monitoimipaikkaiset ilmoitukset merkitään lisätarkistusta vaativiksi.
+  - Sääntöpohjainen luokittelu erottaa varsinaiset voimassa olevat sertifikaatit sertifikaattivalmentavista opinnoista ja kokeeseen valmistautumisesta sekä erottelee pakolliset sertifikaatit toivotuista/eduksi katsotuista vaatimuksista ilman perusteetonta "puuttuu varmasti" -väitettä.
+  - Hakuajan tarkistus (`parseDeadlineAssessment`) validoi kalenteripäivät (`toValidIsoDate`), tulkitsee pelkät päivämäärät `Europe/Helsinki`-aikavyöhykkeessä, jättää vapaamuotoiset teksti-ilmaukset ja julkaisupäivät erilleen eikä merkitse epämääräistä tai virheellistä päivämäärää kelvolliseksi (`valid`).
 - **Konservatiivinen sääntöpohjainen suodatus ja luokittelu:** Tulokset suodatetaan käyttäjän tallennettavien hakuasetusten (`cia_discovery_preferences_v1`, oletuksena mm. harjoittelu/trainee/alkuvaihe, `Uusimaa`, Suomeen sopiva työskentelymalli, IT/kyber- ja välilliset polut, kieli fi/en) sekä valinnaisesti tallennetun hakijaprofiilin perusteella. Jokainen osuma luokitellaan sanallisesti (`Erittäin kiinnostava`, `Mahdollisesti sopiva`, `Vaatii lisätarkistusta` tai `Heikko vastaavuus`) perusteluineen ja epävarmuuksineen ilman keksittyjä prosenttilukuja tai automaattisia Gemini-kutsuja.
-- **Suora siirto analyysinäkymään:** **Analysoi tarkemmin** -painike vie valitun ilmoituksen (`formatDiscoveredJobForAnalysis`) nykyiseen **Analysoi ilmoitus** -näkymään tarkistettavaksi (suojaten olemassa olevaa tekstiä/tulosta/käynnissä olevaa hakua korvausvahvistuksella ja ilmoittaen selkeästi mahdollisesta 30 000 merkin katkaisusta tai vanhentuneesta hakuajasta).
+- **Suora siirto analyysinäkymään ja pyyntöjen tilanhallinta:** **Analysoi tarkemmin** -painike vie valitun ilmoituksen (`formatDiscoveredJobForAnalysis`) nykyiseen **Analysoi ilmoitus** -näkymään tarkistettavaksi (suojaten olemassa olevaa tekstiä, pelkkää URL-syötettä, tulosta sekä käynnissä olevaa analyysiä tai URL-noutoa korvausvahvistuksella ja ilmoittaen selkeästi mahdollisesta 30 000 merkin katkaisusta tai vanhentuneesta hakuajasta). Haun keskeytys ja nopea uudelleenkäynnistys koordinoidaan (`src/lib/discoveryRunner.ts`), jotta vanhentunut tai keskeytetty haku ei ylikirjoita uudemman haun tilaa.
 
 **Rajoitukset:** Haku kattaa vain lähderekisterissä määritellyt työnantajat eikä etsi koko internetistä. Ulkoisille ATS-rajapinnoille ei välitetä hakijaprofiilia. Etätyö ilman vahvistusta Suomesta työskentelyn mahdollisuudesta tai puuttuva sijainti merkitään aina lisätarkistusta vaativaksi.
 
@@ -135,7 +139,8 @@ React: analyysin näyttäminen
 - `server/fetchJob.ts` – SSRF-suojattu ja DNS-sidottu HTTPS-nouto sallituista työpaikkaportaaleista, JSON-LD- ja HTML-sisällön poiminta, kattavuusarviointi sekä aikavyöhyke- ja kellonaikatarkka hakuajan ristiriita-arviointi.
 - `server/analyzeJob.ts` – hakijariippumaton analyysin ohjeistus (`SYSTEM_INSTRUCTION`), dynaaminen `buildPrompt()` annetulle profiilille, Gemini-kutsu, keskeytys ja analyysin virheenkäsittely.
 - `src/lib/validation.ts` – hakijaprofiilin, työpaikkahaun asetusten, URL-noutopyynnön, analyysituloksen, tallennettujen hakukohteiden ja JSON-varmuuskopion Zod-skeemat sekä normalisointi.
-- `src/lib/discoveryHandoff.ts` – löydetyn ilmoituksen siirtomuotoilu analyysinäkymään (katkaisu- ja aikarajavaroitukset), korvausvahvistuksen ehdot, turvallinen HTTPS-linkkitarkistus ja lajittelu.
+- `src/lib/discoveryHandoff.ts` – löydetyn ilmoituksen siirtomuotoilu analyysinäkymään (katkaisu- ja aikarajavaroitukset), korvausvahvistuksen ehdot (sisältäen myös pelkän URL-syötteen), turvallinen HTTPS-linkkitarkistus ja lajittelu.
+- `src/lib/discoveryRunner.ts` – työpaikkahaun asynkronisten pyyntöjen koordinointi, keskeytys ja nopean uudelleenkäynnistyksen suojaus.
 - `src/lib/storage.ts` – `localStorage`-tallennus ja -luku (profiili, tallennetut hakukohteet ja erilliset hakuasetukset `cia_discovery_preferences_v1`) sekä JSON-varmuuskopion muodostus ja jäsentäminen.
 - `src/lib/analysisRunner.ts` – käyttöliittymän analyysipyyntöjen koordinointi ja myöhästyneiden tulosten käsittely.
 - `src/lib/availability.ts` – soveltuvuuden ja manuaalisesti tarkistetun hakutilanteen erottelu.
@@ -191,7 +196,7 @@ Gemini API -avain määritetään **palvelimen ympäristömuuttujaksi** nimellä
 
 ### Regressio- ja integraatiotestit
 
-Viimeisimmän varmistetun testiajon mukaan `npm test` läpäisi **49/49 testiä**, `npm run lint` (`tsc --noEmit`) läpäisi TypeScript-tyyppitarkistuksen virheettä ja `npm run build` onnistui. Testit suoritetaan täysin ilman ulkoisia verkkopyyntöjä paikallisessa kehitysympäristössä.
+Viimeisimmän varmistetun testiajon mukaan `npm test` läpäisi **56/56 testiä**, `npm run lint` (`tsc --noEmit`) läpäisi TypeScript-tyyppitarkistuksen virheettä ja `npm run build` onnistui. Testit suoritetaan täysin ilman ulkoisia verkkopyyntöjä paikallisessa kehitysympäristössä.
 
 Testisarja kattaa muun muassa:
 - osaamispuutteiden ja oppimismahdollisuuksien erottelun (`deduplicateGaps()`), harjoittelun opinnollistamisen, analyysin keskeytyksen ja aikaleimat;
@@ -199,7 +204,7 @@ Testisarja kattaa muun muassa:
 - URL-validoinnin, JSON-LD- ja HTML-sisällönpoiminnan, kattavuusluokituksen (`complete` / `partial` / `uncertain`), portaalikohtaisen siivouksen sekä `Europe/Helsinki`-aikavyöhykkeen ja eksplisiittisten kellonaikojen ristiriitavertailun (`14:00` vs `16:00`, `14:00` vs `23:59`, `23:59` vs `16:15`, kesä- ja talviaika);
 - `urlVerificationNotice`-tekstin totuudenmukaisen normalisoinnin sekä URL-kohtaisissa että manuaalisissa analyyseissä;
 - **eristetyt todellisen `node:https`-kuljetuskerroksen integraatiotestit** (`executePinnedHttpsGet` paikallista itseallekirjoitettua testipalvelinta vasten): IP-osoitteen sidonta `Host`- ja SNI-otsikoilla, epäluotetun tai väärän isäntänimen TLS-varmenteen hylkäys (`rejectUnauthorized: true`), `302`-uudelleenohjauksen esto, raakavasteen ja puretun gzip-vastauksen kokoraja, HTTPS-aikakatkaisu, `AbortSignal`-keskeytys sekä DNS-haun aikakatkaisu (`504 DNS_TIMEOUT`) ja DNS-keskeytys (`499 ABORTED`);
-- **simuloidut/mockatut yksikkötestit**: `fetchJobFromUrl`-kutsut sekä Job Discovery MVP:n Ashby-, Greenhouse- ja Lever-sovittimet, Lever-sivutus ja silmukkakatkaisu, tyhjä työpaikkalista, HTTP 429 / aikakatkaisu / osittainen lähdevirhe, SSRF-/DNS-estot, TTL-välimuistin profiilieristys, juniori-/senior- ja ei-IT-roolien erottelu, välilliset kyberpolut, etätyö- ja sijaintiepävarmuudet, kaksoiskappaleiden esto, siirto analyysinäkymään (katkaisu- ja korvaussuoja), URL-turvallisuus sekä XSS-/prompt-injection-HTML-puhdistus.
+- **simuloidut/mockatut yksikkötestit ja 0.3.1-laadunparannustestit**: `fetchJobFromUrl`-kutsut sekä Job Discovery MVP:n Ashby-, Greenhouse- ja Lever-sovittimet, Lever-sivutus ja silmukkakatkaisu, tyhjä työpaikkalista, HTTP 429 / aikakatkaisu / osittainen lähdevirhe, SSRF-/DNS-estot, TTL-välimuistin profiilieristys, juniori-/senior- ja ei-IT-roolien erottelu, välilliset kyberpolut, `Suomi`/tarkka `Helsinki`/`Uusimaa` -sijaintisuodatus ja ristiriitaisten maakoodien sekä monitoimipaikkojen käsittely, vahvaan lähde-ID:hen tai URL:iin rajoitettu deduplikaatio, sertifikaattien ja valmentavien opintojen erottelu (pakollinen vs. toivottu sertifikaatti), `Europe/Helsinki`- ja kalenteripäivätarkistettu hakuajan tulkinta, hakupyynnön keskeytyksen/uudelleenhaun kilpailutilanteiden hallinta (`DiscoverySearchCoordinator`), analyysisiirron vahvistusehdot (mukaan lukien pelkkä URL-syöte), React-näkymien palvelinpuolen renderöintitarkistus sekä XSS-/prompt-injection-HTML-puhdistus.
 
 ### Erillinen elävien ATS-rajapintojen tarkistusajo (17.11.2026)
 
@@ -286,4 +291,4 @@ Suuri osa sovelluksen varsinaisesta lähdekoodista on syntynyt Google AI Studion
 
 ---
 
-**Dokumentoinnin seuraava tarkistuspiste:** pidä tämä README ajan tasalla lähdekoodin, regressio- ja integraatiotestien (`49/49`) ja julkaisuympäristön vaatimusten kanssa aina, kun toiminnallisuus, tietoturvakäytännöt tai käyttöympäristö muuttuvat olennaisesti.
+**Dokumentoinnin seuraava tarkistuspiste:** pidä tämä README ajan tasalla lähdekoodin, regressio- ja integraatiotestien (`56/56`) ja julkaisuympäristön vaatimusten kanssa aina, kun toiminnallisuus, tietoturvakäytännöt tai käyttöympäristö muuttuvat olennaisesti.

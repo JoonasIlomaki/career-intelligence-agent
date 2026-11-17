@@ -196,14 +196,15 @@ export function shouldConfirmDiscoveryTransfer(state: {
   isLoading: boolean;
   isFetchingJob: boolean;
   jobText: string;
+  jobUrl?: string;
   hasResult: boolean;
 }): boolean {
   return (
     state.isLoading ||
     state.isFetchingJob ||
     state.jobText.trim().length > 0 ||
+    (state.jobUrl ?? "").trim().length > 0 ||
     state.hasResult
   );
 }
-
 

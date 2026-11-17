@@ -14,6 +14,12 @@ export function normalizeDiscoveryJobUrl(rawUrl: string): string {
   if (!trimmed) return "";
   try {
     const parsed = new URL(trimmed);
+    if (
+      (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+      !parsed.hostname
+    ) {
+      return "";
+    }
     const trackingParams = [
       "utm_source",
       "utm_medium",
@@ -34,7 +40,7 @@ export function normalizeDiscoveryJobUrl(rawUrl: string): string {
       search ? `?${search}` : ""
     }`;
   } catch {
-    return trimmed.toLowerCase();
+    return "";
   }
 }
 
@@ -82,13 +88,23 @@ function mergeJobRecords(
   };
 }
 
+const SUSPECTED_DUPLICATE_NOTE =
+  "Huomio: Samalta työnantajalta löytyi toinen ilmoitus samalla nimikkeellä ja sijainnilla — tarkista, ovatko ne erillisiä avoimia paikkoja.";
+
+function withUncertaintyHint(job: DiscoveredJob, hint: string): DiscoveredJob {
+  if (job.uncertainties.includes(hint)) return job;
+  return {
+    ...job,
+    uncertainties: [...job.uncertainties, hint],
+  };
+}
+
 /**
- * Deduplicates discovered jobs without ever merging different jobs solely on matching title.
- * Primary keys:
- *  1. source + employerId + sourceJobId
- *  2. normalized jobUrl
- * Secondary suspected-duplicate key (only when location is known):
- *  3. normalized company + normalized title + normalized location
+ * Deduplicates discovered jobs automatically ONLY on strong unique identifiers:
+ *  1. non-empty source + employer/company + sourceJobId
+ *  2. normalized valid HTTP(S) jobUrl
+ * Matching company + title + location with distinct IDs/URLs are preserved as separate records
+ * with a non-destructive suspected-duplicate notice so distinct roles are never silently discarded.
  */
 export function deduplicateDiscoveredJobs(jobs: DiscoveredJob[]): {
   jobs: DiscoveredJob[];
@@ -101,22 +117,17 @@ export function deduplicateDiscoveredJobs(jobs: DiscoveredJob[]): {
   let duplicateCount = 0;
 
   for (const job of jobs) {
-    const sourceKey = `${job.source}|${normalizeToken(job.company)}|${job.sourceJobId}`;
-    const urlKey = normalizeDiscoveryJobUrl(job.jobUrl);
-    const hasKnownLocation =
-      job.location !== "Ei ilmoitettu" && normalizeToken(job.location).length > 0;
-    const compositeKey = hasKnownLocation
-      ? `${normalizeToken(job.company)}|${normalizeToken(job.title)}|${normalizeToken(
-          job.location
-        )}`
+    const cleanSourceId = job.sourceJobId.trim();
+    const sourceKey = cleanSourceId
+      ? `${job.source}|${normalizeToken(job.employerId || job.company)}|${cleanSourceId}`
       : "";
+    const urlKey = normalizeDiscoveryJobUrl(job.jobUrl);
 
-    let existingIdx: number | undefined = bySourceId.get(sourceKey);
+    let existingIdx: number | undefined = sourceKey
+      ? bySourceId.get(sourceKey)
+      : undefined;
     if (existingIdx === undefined && urlKey) {
       existingIdx = byUrl.get(urlKey);
-    }
-    if (existingIdx === undefined && compositeKey) {
-      existingIdx = byCompanyTitleLocation.get(compositeKey);
     }
 
     if (existingIdx !== undefined) {
@@ -125,11 +136,33 @@ export function deduplicateDiscoveredJobs(jobs: DiscoveredJob[]): {
       continue;
     }
 
+    const hasKnownLocation =
+      job.location !== "Ei ilmoitettu" && normalizeToken(job.location).length > 0;
+    const compositeKey = hasKnownLocation
+      ? `${normalizeToken(job.company)}|${normalizeToken(job.title)}|${normalizeToken(
+          job.location
+        )}`
+      : "";
+
+    let entryToPush = job;
+    if (compositeKey) {
+      const suspectedIdx = byCompanyTitleLocation.get(compositeKey);
+      if (suspectedIdx !== undefined) {
+        result[suspectedIdx] = withUncertaintyHint(
+          result[suspectedIdx],
+          SUSPECTED_DUPLICATE_NOTE
+        );
+        entryToPush = withUncertaintyHint(job, SUSPECTED_DUPLICATE_NOTE);
+      }
+    }
+
     const idx = result.length;
-    result.push(job);
-    bySourceId.set(sourceKey, idx);
+    result.push(entryToPush);
+    if (sourceKey) bySourceId.set(sourceKey, idx);
     if (urlKey) byUrl.set(urlKey, idx);
-    if (compositeKey) byCompanyTitleLocation.set(compositeKey, idx);
+    if (compositeKey && !byCompanyTitleLocation.has(compositeKey)) {
+      byCompanyTitleLocation.set(compositeKey, idx);
+    }
   }
 
   return { jobs: result, duplicateCount };

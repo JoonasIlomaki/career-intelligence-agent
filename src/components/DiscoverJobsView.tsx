@@ -35,6 +35,10 @@ import {
   isSafeExternalHttpUrl,
   sortDiscoveredJobs,
 } from "../lib/discoveryHandoff.ts";
+import {
+  createDiscoverySearchSession,
+  DISCOVERY_CANCELLED_MESSAGE,
+} from "../lib/discoveryRunner.ts";
 
 interface DiscoverJobsViewProps {
   profile: CandidateProfile;
@@ -114,7 +118,32 @@ export function DiscoverJobsView({
     {}
   );
 
-  const abortRef = useRef<AbortController | null>(null);
+  const sessionRef = useRef<ReturnType<typeof createDiscoverySearchSession> | null>(
+    null
+  );
+  if (!sessionRef.current) {
+    sessionRef.current = createDiscoverySearchSession({
+      onStart: () => {
+        setIsSearching(true);
+        setErrorMessage(null);
+        setCancelledMessage(null);
+      },
+      onCancel: () => {
+        setIsSearching(false);
+        setErrorMessage(null);
+        setCancelledMessage(DISCOVERY_CANCELLED_MESSAGE);
+      },
+      onSuccess: (payload) => {
+        setResponse(payload);
+        setExpandedJobIds({});
+        setIsSearching(false);
+      },
+      onError: (msg) => {
+        setErrorMessage(msg);
+        setIsSearching(false);
+      },
+    });
+  }
   const isDefaultProfile = isDefaultCandidateProfile(profile);
 
   useEffect(() => {
@@ -122,8 +151,9 @@ export function DiscoverJobsView({
   }, [preferences]);
 
   useEffect(() => {
+    const session = sessionRef.current;
     return () => {
-      abortRef.current?.abort();
+      session?.cancel();
     };
   }, []);
 
@@ -149,28 +179,15 @@ export function DiscoverJobsView({
   }
 
   function handleCancelSearch() {
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
-      setIsSearching(false);
-      setErrorMessage(null);
-      setCancelledMessage("Työpaikkahaku keskeytetty");
-    }
+    sessionRef.current?.cancel();
   }
 
   async function runDiscovery(overridePrefs?: DiscoverySearchPreferences) {
-    if (isSearching) return;
+    const session = sessionRef.current;
+    if (!session || session.isRunning() || isSearching) return;
     const activePrefs = overridePrefs ?? preferences;
 
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setIsSearching(true);
-    setErrorMessage(null);
-    setCancelledMessage(null);
-
-    try {
+    await session.execute(async (signal) => {
       const res = await fetch("/api/discover-jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -179,7 +196,7 @@ export function DiscoverJobsView({
           profile: activePrefs.useSavedProfile ? profile : undefined,
           isDefaultProfile: activePrefs.useSavedProfile ? isDefaultProfile : false,
         }),
-        signal: controller.signal,
+        signal,
       });
 
       const payload = await res.json();
@@ -189,27 +206,8 @@ export function DiscoverJobsView({
         );
       }
 
-      if (controller.signal.aborted) {
-        return;
-      }
-
-      setResponse(payload as DiscoverJobsResponse);
-      setExpandedJobIds({});
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        return;
-      }
-      setErrorMessage(
-        err instanceof Error
-          ? err.message
-          : "Verkkovirhe työpaikkojen haun aikana."
-      );
-    } finally {
-      if (abortRef.current === controller) {
-        abortRef.current = null;
-      }
-      setIsSearching(false);
-    }
+      return payload as DiscoverJobsResponse;
+    });
   }
 
   function handleSearchSubmit(e: React.FormEvent) {
@@ -701,7 +699,9 @@ export function DiscoverJobsView({
               </div>
               <button
                 type="button"
+                disabled={isSearching}
                 onClick={() => {
+                  if (sessionRef.current?.isRunning() || isSearching) return;
                   const broadened: DiscoverySearchPreferences = {
                     ...preferences,
                     seniorityLevel: "all",
@@ -714,7 +714,7 @@ export function DiscoverJobsView({
                   setShowWeakMatches(true);
                   void runDiscovery(broadened);
                 }}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-md hover:bg-slate-50 cursor-pointer whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-md hover:bg-slate-50 cursor-pointer whitespace-nowrap disabled:opacity-50"
               >
                 Näytä kaikki tasot ja toimialat ilman suodatusta
               </button>

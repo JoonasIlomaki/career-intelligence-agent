@@ -2,6 +2,11 @@ import type {
   DiscoveredJob,
   DiscoveryRemoteType,
 } from "../../src/types/career.ts";
+import {
+  getTimeZoneDateParts,
+  helsinkiLocalDateTimeToEpochMs,
+  toValidIsoDate,
+} from "../fetchJob.ts";
 import { sanitizeExternalHtmlToPlainText } from "./htmlSanitizer.ts";
 import type { RawAtsJobRecord } from "./types.ts";
 
@@ -40,6 +45,85 @@ const FINLAND_LOCATIONS = [
   "rovaniemi",
 ];
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function containsWholePlaceTerm(text: string, term: string): boolean {
+  if (!text || !term) return false;
+  const pattern = new RegExp(
+    `(?:^|[^a-z0-9äöå])${escapeRegExp(term)}(?:$|[^a-z0-9äöå])`,
+    "i"
+  );
+  return pattern.test(text);
+}
+
+const COUNTRY_RAW_MAP: Record<string, string> = {
+  fi: "Finland",
+  fin: "Finland",
+  finland: "Finland",
+  suomi: "Finland",
+  se: "Sweden",
+  swe: "Sweden",
+  sweden: "Sweden",
+  ruotsi: "Ruotsi",
+  de: "Saksa",
+  deu: "Saksa",
+  germany: "Saksa",
+  saksa: "Saksa",
+  no: "Norja",
+  norway: "Norja",
+  norja: "Norja",
+  dk: "Tanska",
+  denmark: "Tanska",
+  tanska: "Tanska",
+  nl: "Alankomaat",
+  netherlands: "Alankomaat",
+  alankomaat: "Alankomaat",
+  fr: "Ranska",
+  france: "Ranska",
+  ranska: "Ranska",
+  es: "Espanja",
+  spain: "Espanja",
+  espanja: "Espanja",
+  us: "USA",
+  usa: "USA",
+  "united states": "USA",
+  yhdysvallat: "Yhdysvallat",
+  gb: "United Kingdom",
+  uk: "United Kingdom",
+  "united kingdom": "United Kingdom",
+  "iso-britannia": "Iso-Britannia",
+  ca: "Kanada",
+  canada: "Kanada",
+  kanada: "Kanada",
+  au: "Australia",
+  australia: "Australia",
+  sg: "Singapore",
+  singapore: "Singapore",
+  in: "Intia",
+  india: "Intia",
+  intia: "Intia",
+  mx: "Meksiko",
+  mexico: "Meksiko",
+  meksiko: "Meksiko",
+  ph: "Filippiinit",
+  philippines: "Filippiinit",
+  filippiinit: "Filippiinit",
+  ee: "Viro",
+  estonia: "Viro",
+  viro: "Viro",
+  pl: "Puola",
+  poland: "Puola",
+  puola: "Puola",
+  ie: "Irlanti",
+  ireland: "Irlanti",
+  irlanti: "Irlanti",
+  ch: "Sveitsi",
+  switzerland: "Sveitsi",
+  sveitsi: "Sveitsi",
+};
+
 const NON_FINLAND_COUNTRIES_AND_CITIES: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\b(usa|u\.s\.a\.|united states|us only|new york|san francisco|minneapolis|austin|chicago|boston|seattle)\b/i, label: "Yhdysvallat" },
   { pattern: /\b(uk|united kingdom|london|manchester)\b/i, label: "Iso-Britannia" },
@@ -47,15 +131,19 @@ const NON_FINLAND_COUNTRIES_AND_CITIES: Array<{ pattern: RegExp; label: string }
   { pattern: /\b(philippines|manila)\b/i, label: "Filippiinit" },
   { pattern: /\b(mexico|mexico city)\b/i, label: "Meksiko" },
   { pattern: /\b(india|bangalore|bengaluru)\b/i, label: "Intia" },
-  { pattern: /\b(germany|berlin|munich|frankfurt)\b/i, label: "Saksa" },
-  { pattern: /\b(sweden|stockholm|gothenburg|malmö|malmo)\b/i, label: "Ruotsi" },
-  { pattern: /\b(norway|oslo)\b/i, label: "Norja" },
-  { pattern: /\b(denmark|copenhagen)\b/i, label: "Tanska" },
-  { pattern: /\b(netherlands|amsterdam)\b/i, label: "Alankomaat" },
-  { pattern: /\b(france|paris)\b/i, label: "Ranska" },
-  { pattern: /\b(spain|madrid|barcelona)\b/i, label: "Espanja" },
-  { pattern: /\b(canada|toronto|vancouver)\b/i, label: "Kanada" },
+  { pattern: /\b(germany|saksa|berlin|munich|münchen|frankfurt|hamburg)\b/i, label: "Saksa" },
+  { pattern: /\b(sweden|ruotsi|stockholm|gothenburg|malmö|malmo)\b/i, label: "Ruotsi" },
+  { pattern: /\b(norway|norja|oslo)\b/i, label: "Norja" },
+  { pattern: /\b(denmark|tanska|copenhagen)\b/i, label: "Tanska" },
+  { pattern: /\b(netherlands|alankomaat|amsterdam)\b/i, label: "Alankomaat" },
+  { pattern: /\b(france|ranska|paris)\b/i, label: "Ranska" },
+  { pattern: /\b(spain|espanja|madrid|barcelona)\b/i, label: "Espanja" },
+  { pattern: /\b(canada|kanada|toronto|vancouver)\b/i, label: "Kanada" },
   { pattern: /\b(australia|sydney|melbourne)\b/i, label: "Australia" },
+  { pattern: /\b(estonia|viro|tallinn)\b/i, label: "Viro" },
+  { pattern: /\b(poland|puola|warsaw|krakow)\b/i, label: "Puola" },
+  { pattern: /\b(ireland|irlanti|dublin)\b/i, label: "Irlanti" },
+  { pattern: /\b(switzerland|sveitsi|zurich|zürich|geneva)\b/i, label: "Sveitsi" },
 ];
 
 export function inferCountryFromMetadata(
@@ -64,22 +152,26 @@ export function inferCountryFromMetadata(
 ): string {
   if (countryRaw && countryRaw.trim()) {
     const c = countryRaw.trim();
-    if (/^fi$/i.test(c)) return "Finland";
-    if (/^se$/i.test(c)) return "Sweden";
-    if (/^us$/i.test(c)) return "USA";
-    if (/^gb$/i.test(c)) return "United Kingdom";
+    const mapped = COUNTRY_RAW_MAP[c.toLowerCase()];
+    if (mapped) return mapped;
     return c;
   }
 
-  const lower = locationText.toLowerCase();
-  if (FINLAND_LOCATIONS.some((loc) => lower.includes(loc))) {
+  const hasFinlandLocation = FINLAND_LOCATIONS.some((loc) =>
+    containsWholePlaceTerm(locationText, loc)
+  );
+  const foreignMatch = NON_FINLAND_COUNTRIES_AND_CITIES.find((item) =>
+    item.pattern.test(locationText)
+  );
+
+  if (hasFinlandLocation && foreignMatch) {
+    return "Useita maita (sis. Suomi)";
+  }
+  if (hasFinlandLocation) {
     return "Finland";
   }
-
-  for (const item of NON_FINLAND_COUNTRIES_AND_CITIES) {
-    if (item.pattern.test(locationText)) {
-      return item.label;
-    }
+  if (foreignMatch) {
+    return foreignMatch.label;
   }
 
   return "Ei ilmoitettu";
@@ -121,17 +213,33 @@ export function classifyRemoteType(
     remoteType = "onsite";
   }
 
+  const countryMapped = raw.countryRaw?.trim()
+    ? COUNTRY_RAW_MAP[raw.countryRaw.trim().toLowerCase()] ?? raw.countryRaw.trim()
+    : null;
+  const countryIsExplicitlyForeign =
+    Boolean(countryMapped) &&
+    countryMapped !== "Finland" &&
+    countryMapped !== "Ei ilmoitettu";
+  const hasFinlandLocation =
+    !countryIsExplicitlyForeign &&
+    (countryMapped === "Finland" ||
+      FINLAND_LOCATIONS.some((city) =>
+        containsWholePlaceTerm(raw.locationRaw ?? "", city)
+      ));
   const locationCombined = [raw.locationRaw, raw.countryRaw]
     .filter(Boolean)
     .join(" ");
-  const hasFinlandLocation = FINLAND_LOCATIONS.some((city) =>
-    locationCombined.toLowerCase().includes(city)
-  );
   const nonFinlandMatch = NON_FINLAND_COUNTRIES_AND_CITIES.find((c) =>
     c.pattern.test(locationCombined)
   );
 
   if (remoteType === "remote") {
+    if (countryIsExplicitlyForeign) {
+      return {
+        remoteType,
+        remoteEligibilityNote: `Etätyö (${countryMapped} — oikeutta Suomesta työskentelyyn ei ole vahvistettu)`,
+      };
+    }
     if (hasFinlandLocation || /\bremote\b[^.\n]{0,40}\b(finland|suomi)\b/i.test(plainDescription)) {
       return {
         remoteType,
@@ -234,6 +342,160 @@ function normalizeEmploymentType(raw: string | null, title: string, desc: string
   return "Ei ilmoitettu";
 }
 
+interface ParsedDiscoveryDeadlineCandidate {
+  display: string;
+  isoDate: string;
+  minuteKey: string;
+  timestampMs: number | null;
+}
+
+function parseSingleDeadlineString(raw: string): {
+  candidate: ParsedDiscoveryDeadlineCandidate | null;
+  invalidDate: boolean;
+  unparseable: boolean;
+} {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { candidate: null, invalidDate: false, unparseable: false };
+  }
+
+  // 1. Date-only ISO: YYYY-MM-DD
+  const dateOnlyMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (dateOnlyMatch) {
+    const y = Number(dateOnlyMatch[1]);
+    const mo = Number(dateOnlyMatch[2]);
+    const d = Number(dateOnlyMatch[3]);
+    const isoDate = toValidIsoDate(y, mo, d);
+    if (!isoDate) {
+      return { candidate: null, invalidDate: true, unparseable: false };
+    }
+    return {
+      candidate: {
+        display: `${d}.${mo}.${y}`,
+        isoDate,
+        minuteKey: isoDate,
+        timestampMs: null,
+      },
+      invalidDate: false,
+      unparseable: false,
+    };
+  }
+
+  // 2. ISO datetime with optional timezone offset: YYYY-MM-DDTHH:mm(:ss(.sss)?)?(Z|+HH:MM|-HH:MM)?
+  const dateTimeMatch =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/i.exec(
+      trimmed
+    );
+  if (dateTimeMatch) {
+    const y = Number(dateTimeMatch[1]);
+    const mo = Number(dateTimeMatch[2]);
+    const d = Number(dateTimeMatch[3]);
+    const hour = Number(dateTimeMatch[4]);
+    const minute = Number(dateTimeMatch[5]);
+    const second = Number(dateTimeMatch[6] ?? "0");
+    const tzRaw = dateTimeMatch[7] ?? "";
+    const isoDate = toValidIsoDate(y, mo, d);
+    if (!isoDate || hour > 23 || minute > 59 || second > 59) {
+      return { candidate: null, invalidDate: true, unparseable: false };
+    }
+
+    let epochMs: number | null = null;
+    if (tzRaw) {
+      const normalizedTz = /^z$/i.test(tzRaw)
+        ? "Z"
+        : /^([+-])(\d{2})(\d{2})$/.test(tzRaw)
+        ? tzRaw.replace(/^([+-])(\d{2})(\d{2})$/, "$1$2:$3")
+        : tzRaw;
+      const parsedMs = Date.parse(
+        `${isoDate}T${dateTimeMatch[4]}:${dateTimeMatch[5]}:${String(second).padStart(
+          2,
+          "0"
+        )}${normalizedTz}`
+      );
+      if (Number.isFinite(parsedMs)) {
+        epochMs = parsedMs;
+      }
+    } else {
+      epochMs = helsinkiLocalDateTimeToEpochMs(isoDate, hour, minute);
+      if (epochMs !== null && second > 0) {
+        epochMs += second * 1000;
+      }
+    }
+
+    if (epochMs === null) {
+      return { candidate: null, invalidDate: true, unparseable: false };
+    }
+
+    const helsinkiParts = getTimeZoneDateParts(epochMs, "Europe/Helsinki");
+    if (!helsinkiParts) {
+      return { candidate: null, invalidDate: true, unparseable: false };
+    }
+    const hm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(helsinkiParts.isoDate);
+    const hHour = String(Math.floor(helsinkiParts.minutes / 60)).padStart(2, "0");
+    const hMin = String(helsinkiParts.minutes % 60).padStart(2, "0");
+    const displayDate = hm
+      ? `${Number(hm[3])}.${Number(hm[2])}.${hm[1]}`
+      : `${d}.${mo}.${y}`;
+    return {
+      candidate: {
+        display: `${displayDate} klo ${hHour}:${hMin}`,
+        isoDate: helsinkiParts.isoDate,
+        minuteKey: `${helsinkiParts.isoDate}T${hHour}:${hMin}`,
+        timestampMs: epochMs,
+      },
+      invalidDate: false,
+      unparseable: false,
+    };
+  }
+
+  // 3. Finnish/European numeric date D.M.YYYY with optional time
+  const fiMatch =
+    /^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s*(?:klo|at)?\s*(\d{1,2})[:.](\d{2}))?$/i.exec(
+      trimmed
+    );
+  if (fiMatch) {
+    const d = Number(fiMatch[1]);
+    const mo = Number(fiMatch[2]);
+    const y = Number(fiMatch[3]);
+    const isoDate = toValidIsoDate(y, mo, d);
+    if (!isoDate) {
+      return { candidate: null, invalidDate: true, unparseable: false };
+    }
+    if (fiMatch[4] !== undefined && fiMatch[5] !== undefined) {
+      const hour = Number(fiMatch[4]);
+      const minute = Number(fiMatch[5]);
+      if (hour > 23 || minute > 59) {
+        return { candidate: null, invalidDate: true, unparseable: false };
+      }
+      const epochMs = helsinkiLocalDateTimeToEpochMs(isoDate, hour, minute);
+      const hh = String(hour).padStart(2, "0");
+      const mm = String(minute).padStart(2, "0");
+      return {
+        candidate: {
+          display: `${d}.${mo}.${y} klo ${hh}:${mm}`,
+          isoDate,
+          minuteKey: `${isoDate}T${hh}:${mm}`,
+          timestampMs: epochMs,
+        },
+        invalidDate: false,
+        unparseable: false,
+      };
+    }
+    return {
+      candidate: {
+        display: `${d}.${mo}.${y}`,
+        isoDate,
+        minuteKey: isoDate,
+        timestampMs: null,
+      },
+      invalidDate: false,
+      unparseable: false,
+    };
+  }
+
+  return { candidate: null, invalidDate: false, unparseable: true };
+}
+
 function parseDeadlineAssessment(
   deadlineRaw: string | null,
   plainDescription: string,
@@ -242,64 +504,114 @@ function parseDeadlineAssessment(
   deadline: string | null;
   deadlineStatus: "valid" | "expired" | "conflicting" | "unknown";
 } {
-  const todayIso = nowDate.toISOString().slice(0, 10);
-  const candidates: Array<{ display: string; isoDate: string }> = [];
+  const nowEpochMs = nowDate.getTime();
+  const helsinkiNow = getTimeZoneDateParts(nowEpochMs, "Europe/Helsinki");
+  const todayHelsinkiIso =
+    helsinkiNow?.isoDate ?? nowDate.toISOString().slice(0, 10);
 
-  if (deadlineRaw && deadlineRaw.trim()) {
-    const trimmed = deadlineRaw.trim();
-    const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
-    if (isoMatch) {
-      const isoDate = `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
-      candidates.push({
-        display: `${Number(isoMatch[3])}.${Number(isoMatch[2])}.${isoMatch[1]}`,
-        isoDate,
-      });
-    } else {
-      return { deadline: trimmed, deadlineStatus: "valid" };
+  const candidates: ParsedDiscoveryDeadlineCandidate[] = [];
+  const trimmedRaw = deadlineRaw?.trim() ?? "";
+
+  if (trimmedRaw) {
+    const parsedRaw = parseSingleDeadlineString(trimmedRaw);
+    if (parsedRaw.invalidDate || parsedRaw.unparseable) {
+      // Unparseable free-text (e.g. "end of November") or invalid calendar date (e.g. "31.02.2026")
+      // must NEVER be marked "valid".
+      return {
+        deadline: trimmedRaw,
+        deadlineStatus: "unknown",
+      };
+    }
+    if (parsedRaw.candidate) {
+      candidates.push(parsedRaw.candidate);
     }
   }
 
+  let hasInvalidBodyDate = false;
   const fiDeadlineRegex =
-    /(?:hakuaika\s+(?:päättyy|on)|haku\s+päättyy|viimeinen\s+hakupäivä|application\s+deadline|closing\s+date|apply\s+(?:by|before|until))\s*:?\s*(\d{1,2})\.(\d{1,2})\.(\d{4})/gi;
+    /(?:hakuaika\s+(?:päättyy|on)|haku\s+päättyy|viimeinen\s+hakupäivä|hakemukset\s+viimeistään|lähetä\s+hakemus\s+viimeistään|application\s+deadline|closing\s+date|apply\s+(?:by|before|until))\s*:?\s*(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s*(?:klo|at)?\s*(\d{1,2})[:.](\d{2}))?/gi;
   for (const m of plainDescription.matchAll(fiDeadlineRegex)) {
     const d = Number(m[1]);
     const mo = Number(m[2]);
     const y = Number(m[3]);
-    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && y >= 2020 && y <= 2100) {
-      const isoDate = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(
-        2,
-        "0"
-      )}`;
-      candidates.push({ display: `${d}.${mo}.${y}`, isoDate });
+    const isoDate = toValidIsoDate(y, mo, d);
+    if (!isoDate) {
+      hasInvalidBodyDate = true;
+      continue;
+    }
+    if (m[4] !== undefined && m[5] !== undefined) {
+      const hour = Number(m[4]);
+      const minute = Number(m[5]);
+      if (hour <= 23 && minute <= 59) {
+        const hh = String(hour).padStart(2, "0");
+        const mm = String(minute).padStart(2, "0");
+        candidates.push({
+          display: `${d}.${mo}.${y} klo ${hh}:${mm}`,
+          isoDate,
+          minuteKey: `${isoDate}T${hh}:${mm}`,
+          timestampMs: helsinkiLocalDateTimeToEpochMs(isoDate, hour, minute),
+        });
+      }
+    } else {
+      candidates.push({
+        display: `${d}.${mo}.${y}`,
+        isoDate,
+        minuteKey: isoDate,
+        timestampMs: null,
+      });
     }
   }
 
   const isoBodyRegex =
-    /(?:application\s+deadline|closing\s+date|apply\s+(?:by|before|until)|hakuaika\s+päättyy)\s*:?\s*(\d{4})-(\d{2})-(\d{2})/gi;
+    /(?:application\s+deadline|closing\s+date|apply\s+(?:by|before|until)|hakuaika\s+(?:päättyy|on)|haku\s+päättyy|viimeinen\s+hakupäivä)\s*:?\s*(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?/gi;
   for (const m of plainDescription.matchAll(isoBodyRegex)) {
-    const isoDate = `${m[1]}-${m[2]}-${m[3]}`;
-    candidates.push({
-      display: `${Number(m[3])}.${Number(m[2])}.${m[1]}`,
-      isoDate,
-    });
+    const rawSlice = m[0].slice(m[0].search(/\d{4}-\d{2}-\d{2}/));
+    const parsedBodyIso = parseSingleDeadlineString(rawSlice);
+    if (parsedBodyIso.invalidDate) {
+      hasInvalidBodyDate = true;
+      continue;
+    }
+    if (parsedBodyIso.candidate) {
+      candidates.push(parsedBodyIso.candidate);
+    }
   }
 
   if (candidates.length === 0) {
-    return { deadline: null, deadlineStatus: "unknown" };
+    return {
+      deadline: hasInvalidBodyDate ? "Epäkelpo hakuaika ilmoituksessa" : null,
+      deadlineStatus: "unknown",
+    };
   }
 
   const uniqueDates = [...new Set(candidates.map((c) => c.isoDate))];
-  if (uniqueDates.length > 1) {
+  const uniqueTimedMinutes = [
+    ...new Set(
+      candidates
+        .filter((c) => c.timestampMs !== null)
+        .map((c) => c.minuteKey)
+    ),
+  ];
+
+  if (uniqueDates.length > 1 || uniqueTimedMinutes.length > 1) {
+    const distinctDisplays = [...new Set(candidates.map((c) => c.display))];
     return {
-      deadline: `Ristiriitainen (${candidates.map((c) => c.display).join(" / ")})`,
+      deadline: `Ristiriitainen (${distinctDisplays.join(" / ")})`,
       deadlineStatus: "conflicting",
     };
   }
 
-  const only = candidates[0];
+  // Prefer a timestamped candidate if both date-only and timestamped exist for the same day
+  const preferred =
+    candidates.find((c) => c.timestampMs !== null) ?? candidates[0];
+
+  const isExpired =
+    preferred.timestampMs !== null
+      ? preferred.timestampMs < nowEpochMs
+      : preferred.isoDate < todayHelsinkiIso;
+
   return {
-    deadline: only.display,
-    deadlineStatus: only.isoDate < todayIso ? "expired" : "valid",
+    deadline: preferred.display,
+    deadlineStatus: isExpired ? "expired" : "valid",
   };
 }
 

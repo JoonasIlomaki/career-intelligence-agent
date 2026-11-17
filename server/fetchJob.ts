@@ -1092,7 +1092,7 @@ interface ParsedBodyDeadlineHit {
   timeMinutes: number | null;
 }
 
-function toValidIsoDate(year: number, month: number, day: number): string | null {
+export function toValidIsoDate(year: number, month: number, day: number): string | null {
   if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) {
     return null;
   }
@@ -1107,7 +1107,7 @@ function toValidIsoDate(year: number, month: number, day: number): string | null
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-function getTimeZoneDateParts(
+export function getTimeZoneDateParts(
   epochMs: number,
   timeZone: string
 ): { isoDate: string; minutes: number; monthDay: string } | null {
@@ -1143,7 +1143,7 @@ function getTimeZoneDateParts(
   };
 }
 
-function helsinkiLocalDateTimeToEpochMs(
+export function helsinkiLocalDateTimeToEpochMs(
   isoDate: string,
   hour: number,
   minute: number

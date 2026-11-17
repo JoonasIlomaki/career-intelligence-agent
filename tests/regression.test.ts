@@ -18,6 +18,7 @@ import {
 } from "../src/lib/validation.ts";
 import type {
   DiscoveredJob,
+  DiscoverJobsResponse,
   DiscoverySearchPreferences,
   JobAnalysisResult,
 } from "../src/types/career.ts";
@@ -54,6 +55,8 @@ import {
   JobFetchError,
   validateFetchJobUrl,
 } from "../server/fetchJob.ts";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   formatDiscoveredJobForAnalysis,
   isSafeExternalHttpUrl,
@@ -61,6 +64,14 @@ import {
   shouldConfirmDiscoveryTransfer,
   sortDiscoveredJobs,
 } from "../src/lib/discoveryHandoff.ts";
+import {
+  createDiscoverySearchSession,
+  createInitialDiscoveryUiState,
+  DISCOVERY_CANCELLED_MESSAGE,
+  type DiscoverySearchUiState,
+} from "../src/lib/discoveryRunner.ts";
+import { DiscoverJobsView } from "../src/components/DiscoverJobsView.tsx";
+import { AnalyzeView } from "../src/components/AnalyzeView.tsx";
 import { sanitizeExternalHtmlToPlainText } from "../server/jobDiscovery/htmlSanitizer.ts";
 import { fetchAshbyJobs } from "../server/jobDiscovery/adapters/ashby.ts";
 import { fetchGreenhouseJobs } from "../server/jobDiscovery/adapters/greenhouse.ts";
@@ -3222,6 +3233,620 @@ test("Tapaus 47: Siirto analyysinäkymään käsittelee pituusrajan, keskeytykse
   assert.doesNotMatch(sanitized, /<script|<img|onerror=/i);
   assert.match(sanitized, /Junior IT Analyst/);
 });
+
+test("Tapaus 48 (0.3.1 A): Sijaintisuodatus tukee Suomi-hakua, pitää Helsinki-haun tarkkana Uusimaasta erillään ja estää ulkomaisen maakoodin kuittaamisen kotimaiseksi", () => {
+  const helsinkiJob = makeTestDiscoveredJob({
+    id: "ashby:hox:hel",
+    sourceJobId: "hel",
+    title: "Junior Security Engineer",
+    location: "Helsinki, Finland",
+    country: "Finland",
+  });
+  const espooJob = makeTestDiscoveredJob({
+    id: "ashby:hox:esp",
+    sourceJobId: "esp",
+    title: "Junior Security Engineer",
+    location: "Espoo, Finland",
+    country: "Finland",
+  });
+  const tampereJob = makeTestDiscoveredJob({
+    id: "gh:smartly:tre",
+    sourceJobId: "tre",
+    title: "Junior Software Engineer",
+    location: "Tampere",
+    country: "Finland",
+  });
+
+  // 1. "Suomi" ja "Finland" -haut löytävät suomalaiset kaupungit (myös Helsinki ja Tampere)
+  const suomiPrefs: DiscoverySearchPreferences = {
+    ...DEFAULT_DISCOVERY_PREFERENCES,
+    locationQuery: "Suomi",
+  };
+  assert.equal(
+    scoreDiscoveredJob(helsinkiJob, suomiPrefs, DEFAULT_CANDIDATE_PROFILE).include,
+    true
+  );
+  assert.equal(
+    scoreDiscoveredJob(tampereJob, suomiPrefs, DEFAULT_CANDIDATE_PROFILE).include,
+    true
+  );
+
+  // 2. Tarkka kaupunkihaku "Helsinki" ei saa laajentua Espooseen tai muihin Uudenmaan kuntiin
+  const helsinkiOnlyPrefs: DiscoverySearchPreferences = {
+    ...DEFAULT_DISCOVERY_PREFERENCES,
+    locationQuery: "Helsinki",
+  };
+  assert.equal(
+    scoreDiscoveredJob(helsinkiJob, helsinkiOnlyPrefs, DEFAULT_CANDIDATE_PROFILE)
+      .include,
+    true
+  );
+  assert.equal(
+    scoreDiscoveredJob(espooJob, helsinkiOnlyPrefs, DEFAULT_CANDIDATE_PROFILE)
+      .include,
+    false
+  );
+
+  // 3. "Uusimaa" kattaa edelleen Helsingin, Espoon ja Lohjan, muttei Tamperetta
+  const uusimaaPrefs: DiscoverySearchPreferences = {
+    ...DEFAULT_DISCOVERY_PREFERENCES,
+    locationQuery: "Uusimaa",
+  };
+  assert.equal(
+    scoreDiscoveredJob(helsinkiJob, uusimaaPrefs, DEFAULT_CANDIDATE_PROFILE).include,
+    true
+  );
+  assert.equal(
+    scoreDiscoveredJob(espooJob, uusimaaPrefs, DEFAULT_CANDIDATE_PROFILE).include,
+    true
+  );
+  assert.equal(
+    scoreDiscoveredJob(tampereJob, uusimaaPrefs, DEFAULT_CANDIDATE_PROFILE).include,
+    false
+  );
+
+  // 4. Ristiriitainen yhdistelmä (suomalainen kaupunki + ulkomainen maakoodi DE/Germany/Sweden) ei saa tulla vahvistetuksi kotimaiseksi
+  const rawConflictDe = normalizeRawAtsJob(
+    {
+      source: "lever",
+      employerId: "lever-netlight",
+      company: "ExampleCo",
+      sourceJobId: "de-conflict-1",
+      title: "Junior Security Engineer",
+      locationRaw: "Helsinki",
+      secondaryLocationsRaw: [],
+      countryRaw: "DE",
+      workplaceTypeRaw: "Hybrid",
+      isRemoteFlag: false,
+      employmentTypeRaw: "FullTime",
+      departmentRaw: "Security",
+      descriptionHtmlOrText:
+        "<p>Junior Security Engineer working with SIEM, Python and Linux.</p>",
+      jobUrl: "https://jobs.eu.lever.co/example/de-conflict-1",
+      publishedAt: "2026-11-10T09:00:00Z",
+      updatedAt: null,
+      deadlineRaw: null,
+      languageRaw: "en",
+    },
+    "2026-11-17T10:00:00.000Z",
+    new Date("2026-11-17T10:00:00.000Z")
+  );
+  assert.notEqual(rawConflictDe.country, "Finland");
+  assert.equal(
+    scoreDiscoveredJob(rawConflictDe, suomiPrefs, DEFAULT_CANDIDATE_PROFILE).include,
+    false
+  );
+  assert.equal(
+    scoreDiscoveredJob(rawConflictDe, helsinkiOnlyPrefs, DEFAULT_CANDIDATE_PROFILE)
+      .include,
+    false
+  );
+  const anyConflictScored = scoreDiscoveredJob(
+    rawConflictDe,
+    {
+      ...DEFAULT_DISCOVERY_PREFERENCES,
+      locationQuery: "",
+      remotePreference: "any",
+    },
+    DEFAULT_CANDIDATE_PROFILE
+  );
+  assert.equal(anyConflictScored.scoredJob.suitabilityCategory, "Heikko vastaavuus");
+
+  // 5. Monitoimipaikkainen ilmoitus (Berlin, Germany; Helsinki, Finland ilman ulkomaista countryRaw:ta)
+  // saa tulla Helsinki-osumiin, mutta merkitään epävarmaksi (Vaatii lisätarkistusta)
+  const multiOffice = makeTestDiscoveredJob({
+    id: "gh:smartly:multi",
+    sourceJobId: "multi",
+    title: "Software Developer Trainee",
+    location: "Berlin, Berlin, Germany; Helsinki, Uusimaa, Finland",
+    country: "Finland",
+    description:
+      "Software Developer Trainee with Python, SQL, Linux and security interest.",
+  });
+  const multiScored = scoreDiscoveredJob(
+    multiOffice,
+    helsinkiOnlyPrefs,
+    DEFAULT_CANDIDATE_PROFILE
+  );
+  assert.equal(multiScored.include, true);
+  assert.equal(
+    multiScored.scoredJob.suitabilityCategory,
+    "Vaatii lisätarkistusta"
+  );
+  assert.ok(
+    multiScored.scoredJob.uncertainties.some((u) =>
+      /useita toimipaikkoja|sijainti/i.test(u)
+    )
+  );
+});
+
+test("Tapaus 49 (0.3.1 B): Kaksoiskappaleiden poisto yhdistää vain vahvalla lähde-ID:llä tai URL:lla eikä poista eri rooleja samalla otsikolla ja sijainnilla", () => {
+  const roleA = makeTestDiscoveredJob({
+    id: "ashby:ashby-hoxhunt:101",
+    source: "ashby",
+    employerId: "ashby-hoxhunt",
+    sourceJobId: "101",
+    company: "Hoxhunt",
+    title: "Security Analyst",
+    location: "Helsinki",
+    jobUrl: "https://jobs.ashbyhq.com/hoxhunt/101",
+  });
+  const roleB = makeTestDiscoveredJob({
+    id: "ashby:ashby-hoxhunt:102",
+    source: "ashby",
+    employerId: "ashby-hoxhunt",
+    sourceJobId: "102",
+    company: "Hoxhunt",
+    title: "Security Analyst",
+    location: "Helsinki",
+    jobUrl: "https://jobs.ashbyhq.com/hoxhunt/102",
+  });
+  const roleMissingUrlA = makeTestDiscoveredJob({
+    id: "lever:lever-netlight:201",
+    source: "lever",
+    employerId: "lever-netlight",
+    sourceJobId: "201",
+    company: "Netlight",
+    title: "Junior IT Consultant",
+    location: "Helsinki",
+    jobUrl: "",
+  });
+  const roleMissingUrlB = makeTestDiscoveredJob({
+    id: "lever:lever-netlight:202",
+    source: "lever",
+    employerId: "lever-netlight",
+    sourceJobId: "202",
+    company: "Netlight",
+    title: "Junior IT Consultant",
+    location: "Helsinki",
+    jobUrl: "",
+  });
+
+  // Eri lähde-ID ja eri (tai puuttuva) URL -> kumpaakaan ei saa poistaa automaattisesti
+  const keepBoth = deduplicateDiscoveredJobs([roleA, roleB]);
+  assert.equal(keepBoth.jobs.length, 2);
+  assert.equal(keepBoth.duplicateCount, 0);
+
+  const keepBothMissingUrl = deduplicateDiscoveredJobs([
+    roleMissingUrlA,
+    roleMissingUrlB,
+  ]);
+  assert.equal(keepBothMissingUrl.jobs.length, 2);
+  assert.equal(keepBothMissingUrl.duplicateCount, 0);
+
+  // Sama lähde-ID -> yhdistetään
+  const sameSourceDup = deduplicateDiscoveredJobs([
+    roleA,
+    { ...roleA, jobUrl: "https://jobs.ashbyhq.com/hoxhunt/101?ref=board" },
+  ]);
+  assert.equal(sameSourceDup.jobs.length, 1);
+  assert.equal(sameSourceDup.duplicateCount, 1);
+});
+
+test("Tapaus 50 (0.3.1 C): Sertifikaattien ja niihin linjattujen opintojen erottelu sekä pakollinen vs. toivottu sertifikaatti", () => {
+  const studyOnlyProfile = {
+    ...DEFAULT_CANDIDATE_PROFILE,
+    technicalSkills: "Linux, SQL, Python, Git",
+    coursework:
+      "Suorittanut CISSP-aihealueisiin linjatun tietoturvakokonaisuuden. Ei CISSP-sertifikaattia. Valmistaudun Security+-kokeeseen.",
+    previousItInternship: "IT-tukihenkilöharjoittelu 3 kk.",
+  };
+
+  const mandatoryCisspJob = makeTestDiscoveredJob({
+    title: "Junior Security Engineer",
+    description:
+      "Required: CISSP certification. Work with Linux, SQL, Python and Git in Helsinki.",
+  });
+  const preferredCisspJob = makeTestDiscoveredJob({
+    title: "Junior Security Engineer",
+    description:
+      "CISSP certification is nice to have / preferred. Work with Linux, SQL, Python and Git in Helsinki.",
+  });
+
+  // Opintojaksoa tai valmistautumista EI saa tulkita suoritetuksi CISSP-sertifikaatiksi
+  const mandatoryScored = scoreDiscoveredJob(
+    mandatoryCisspJob,
+    DEFAULT_DISCOVERY_PREFERENCES,
+    studyOnlyProfile
+  );
+  assert.notEqual(
+    mandatoryScored.scoredJob.suitabilityCategory,
+    "Erittäin kiinnostava"
+  );
+  assert.ok(
+    mandatoryScored.scoredJob.uncertainties.some((u) => /CISSP/i.test(u))
+  );
+
+  // Valmistautuminen Security+-kokeeseen ei saa tuottaa sertifikaattikuittausta eikä ylimääräistä Security-taito-osumaa
+  const secPlusPrepJob = makeTestDiscoveredJob({
+    title: "SOC Intern",
+    description:
+      "Mandatory: CompTIA Security+ certification required. Work on tickets in Helsinki.",
+  });
+  const secPlusPrepScored = scoreDiscoveredJob(
+    secPlusPrepJob,
+    DEFAULT_DISCOVERY_PREFERENCES,
+    {
+      ...DEFAULT_CANDIDATE_PROFILE,
+      technicalSkills: "Tikettijärjestelmät",
+      coursework: "Valmistaudun Security+-kokeeseen.",
+      previousItInternship: "Ei aiempaa tietoturvakokemusta.",
+    }
+  );
+  assert.ok(
+    secPlusPrepScored.scoredJob.uncertainties.some((u) => /SECURITY\+/i.test(u))
+  );
+
+  // Oikeasti suoritettu sertifikaatti tunnistetaan päteväksi
+  const certifiedProfile = {
+    ...DEFAULT_CANDIDATE_PROFILE,
+    technicalSkills:
+      "Voimassa oleva CISSP-sertifikaatti, Linux, SQL, Python, Git",
+  };
+  const certifiedScored = scoreDiscoveredJob(
+    mandatoryCisspJob,
+    DEFAULT_DISCOVERY_PREFERENCES,
+    certifiedProfile
+  );
+  assert.ok(
+    !certifiedScored.scoredJob.uncertainties.some((u) => /CISSP/i.test(u))
+  );
+
+  // Pakollinen sertifikaatti vs toivottu/eduksi katsottu sertifikaatti pisteytetään eri tavalla
+  const preferredScored = scoreDiscoveredJob(
+    preferredCisspJob,
+    DEFAULT_DISCOVERY_PREFERENCES,
+    studyOnlyProfile
+  );
+  assert.ok(
+    preferredScored.scoredJob.discoveryScore >
+      mandatoryScored.scoredJob.discoveryScore
+  );
+  assert.ok(
+    preferredScored.scoredJob.uncertainties.some((u) =>
+      /eduksi|toivottu/i.test(u)
+    )
+  );
+  // Puuttuva maininta profiilissa -> ei saa väittää "puuttuu varmasti"
+  const plainNoCertScored = scoreDiscoveredJob(
+    mandatoryCisspJob,
+    DEFAULT_DISCOVERY_PREFERENCES,
+    {
+      ...DEFAULT_CANDIDATE_PROFILE,
+      coursework: "Tietoverkkojen perusteet",
+      technicalSkills: "Linux, Python, SQL",
+    }
+  );
+  assert.ok(
+    !plainNoCertScored.scoredJob.uncertainties.some((u) =>
+      /puuttuu varmasti/i.test(u)
+    )
+  );
+});
+
+test("Tapaus 51 (0.3.1 D): Hakuajan jäsentäminen tarkistaa kalenteripäivän, Europe/Helsinki-aikavyöhykkeen, vapaamuotoisen tekstin ja julkaisupäivät", () => {
+  const baseRaw = {
+    source: "greenhouse" as const,
+    employerId: "greenhouse-smartlyio",
+    company: "Smartly",
+    sourceJobId: "dl-1",
+    title: "Trainee",
+    locationRaw: "Helsinki",
+    secondaryLocationsRaw: [],
+    countryRaw: "Finland",
+    workplaceTypeRaw: "Hybrid",
+    isRemoteFlag: false,
+    employmentTypeRaw: "Intern",
+    departmentRaw: "R&D",
+    descriptionHtmlOrText: "<p>Junior IT trainee.</p>",
+    jobUrl: "https://boards.greenhouse.io/smartlyio/jobs/dl-1",
+    publishedAt: "2026-11-01T10:00:00Z",
+    updatedAt: "2026-11-15T10:00:00Z",
+    languageRaw: "en",
+  };
+
+  // 1. Epäkelpo kalenteripäivä (31.02.2026) ja epämääräinen teksti ("end of November") eivät saa tulla valid-tilaan
+  const invalidCal = normalizeRawAtsJob(
+    { ...baseRaw, deadlineRaw: "31.02.2026" },
+    "2026-11-17T10:00:00Z",
+    new Date("2026-11-17T10:00:00Z")
+  );
+  assert.notEqual(invalidCal.deadlineStatus, "valid");
+  assert.equal(invalidCal.deadlineStatus, "unknown");
+
+  const fuzzyText = normalizeRawAtsJob(
+    { ...baseRaw, deadlineRaw: "end of November" },
+    "2026-11-17T10:00:00Z",
+    new Date("2026-11-17T10:00:00Z")
+  );
+  assert.equal(fuzzyText.deadlineStatus, "unknown");
+
+  // 2. Pelkkä päivämäärä kuluvalle päivälle Europe/Helsinki-ajassa ei ole expired
+  const sameDayHelsinki = normalizeRawAtsJob(
+    { ...baseRaw, deadlineRaw: "2026-11-17" },
+    "2026-11-17T20:30:00Z",
+    new Date("2026-11-17T20:30:00Z") // 22:30 EET 17.11.2026
+  );
+  assert.equal(sameDayHelsinki.deadlineStatus, "valid");
+
+  // 3. UTC 22:30 on Suomessa jo seuraava vuorokausi (18.11.2026 klo 00:30) -> 17.11.2026 on expired
+  const nextDayInHelsinki = normalizeRawAtsJob(
+    { ...baseRaw, deadlineRaw: "2026-11-17" },
+    "2026-11-17T22:30:00Z",
+    new Date("2026-11-17T22:30:00Z") // 00:30 EET 18.11.2026
+  );
+  assert.equal(nextDayInHelsinki.deadlineStatus, "expired");
+
+  // 4. Eksplisiittinen aikaleima menneisyydessä samana päivänä -> expired
+  const pastTimestampSameDay = normalizeRawAtsJob(
+    { ...baseRaw, deadlineRaw: "2026-11-17T14:00:00+02:00" },
+    "2026-11-17T15:00:00+02:00",
+    new Date("2026-11-17T15:00:00+02:00")
+  );
+  assert.equal(pastTimestampSameDay.deadlineStatus, "expired");
+
+  // 5. Julkaisu-/päivityspäivämäärä kuvauksessa ei korvaa puuttuvaa hakuaikaa
+  const publishedOnly = normalizeRawAtsJob(
+    {
+      ...baseRaw,
+      deadlineRaw: null,
+      descriptionHtmlOrText:
+        "<p>Published: 10.11.2026. Updated: 2026-11-15. No deadline mentioned.</p>",
+    },
+    "2026-11-17T10:00:00Z",
+    new Date("2026-11-17T10:00:00Z")
+  );
+  assert.equal(publishedOnly.deadline, null);
+  assert.equal(publishedOnly.deadlineStatus, "unknown");
+});
+
+test("Tapaus 52 (0.3.1 E part 1): shouldConfirmDiscoveryTransfer huomioi myös pelkän URL-kentän sisällön", () => {
+  assert.equal(
+    shouldConfirmDiscoveryTransfer({
+      isLoading: false,
+      isFetchingJob: false,
+      jobText: "",
+      jobUrl: "https://duunitori.fi/tyopaikat/tyo/keskenerainen-1",
+      hasResult: false,
+    }),
+    true
+  );
+  assert.equal(
+    shouldConfirmDiscoveryTransfer({
+      isLoading: false,
+      isFetchingJob: false,
+      jobText: "   ",
+      jobUrl: "   ",
+      hasResult: false,
+    }),
+    false
+  );
+});
+
+test("Tapaus 53 (0.3.1 E part 2): DiscoverySearchCoordinator ja istuntokontrolleri estävät kilpailutilanteet, keskeytyksen jälkeisen tilavuodon ja kaksoishaun", async () => {
+  const initialResponse: DiscoverJobsResponse = {
+    fetchedAt: "2026-11-17T09:00:00.000Z",
+    queriedSources: [],
+    succeededSources: ["ashby-hoxhunt"],
+    failedSources: [],
+    totalFetchedCount: 1,
+    totalDeduplicatedCount: 1,
+    matchedCount: 1,
+    jobs: [makeTestDiscoveredJob({ id: "prev-1", title: "Aiempi osuma" })],
+    warnings: [],
+    profileMode: "saved_profile",
+    registryEmployers: [],
+  };
+  const responseB: DiscoverJobsResponse = {
+    ...initialResponse,
+    fetchedAt: "2026-11-17T10:05:00.000Z",
+    jobs: [makeTestDiscoveredJob({ id: "search-b-1", title: "Haku B:n tulos" })],
+  };
+
+  let state: DiscoverySearchUiState = {
+    ...createInitialDiscoveryUiState(),
+    response: initialResponse,
+    expandedJobIds: { "prev-1": true },
+  };
+
+  const session = createDiscoverySearchSession({
+    onStart: () => {
+      state = { ...state, isSearching: true, errorMessage: null, cancelledMessage: null };
+    },
+    onCancel: () => {
+      state = {
+        ...state,
+        isSearching: false,
+        errorMessage: null,
+        cancelledMessage: DISCOVERY_CANCELLED_MESSAGE,
+      };
+    },
+    onSuccess: (payload) => {
+      state = {
+        ...state,
+        isSearching: false,
+        response: payload,
+        expandedJobIds: {},
+      };
+    },
+    onError: (msg) => {
+      state = {
+        ...state,
+        isSearching: false,
+        errorMessage: msg,
+      };
+    },
+  });
+
+  // 1. Haku A käynnistyy; samanaikainen kaksoishaku estetään synkronisesti
+  let resolveA!: (value: typeof initialResponse) => void;
+  let rejectA!: (reason?: unknown) => void;
+  let fetchCalls = 0;
+
+  const runAPromise = session.execute(
+    () =>
+      new Promise<typeof initialResponse>((res, rej) => {
+        fetchCalls += 1;
+        resolveA = res;
+        rejectA = rej;
+      })
+  );
+  assert.equal(state.isSearching, true);
+  assert.equal(session.isRunning(), true);
+
+  const duplicateAttempt = await session.execute(async () => {
+    fetchCalls += 1;
+    return initialResponse;
+  });
+  assert.equal(duplicateAttempt.status, "blocked_already_running");
+  assert.equal(fetchCalls, 1);
+
+  // 2. Keskeytä A ja aloita välittömästi Haku B ennen A:n lupauksen valmistumista
+  assert.equal(session.cancel(), true);
+  assert.equal(state.isSearching, false);
+  assert.equal(state.cancelledMessage, DISCOVERY_CANCELLED_MESSAGE);
+  assert.equal(state.response?.jobs[0]?.id, "prev-1");
+
+  let resolveB!: (value: typeof responseB) => void;
+  const runBPromise = session.execute(
+    () =>
+      new Promise<typeof responseB>((res) => {
+        fetchCalls += 1;
+        resolveB = res;
+      })
+  );
+  assert.equal(fetchCalls, 2);
+  assert.equal(state.isSearching, true);
+  assert.equal(state.cancelledMessage, null);
+  assert.equal(state.errorMessage, null);
+
+  // 3. Myöhästynyt ei-AbortError-hylkäys Haku A:lta ei saa lopettaa Haku B:n lataustilaa eikä ylikirjoittaa virheviestiä
+  rejectA(new Error("Myöhästynyt verkkovirhe A:sta"));
+  const outcomeA = await runAPromise;
+  assert.equal(outcomeA.status, "cancelled");
+  assert.equal(state.isSearching, true);
+  assert.equal(state.errorMessage, null);
+  assert.equal(state.response?.jobs[0]?.id, "prev-1");
+
+  // 4. Haku B valmistuu ja päivittää tulokset
+  resolveB(responseB);
+  const outcomeB = await runBPromise;
+  assert.equal(outcomeB.status, "completed");
+  assert.equal(state.isSearching, false);
+  assert.equal(state.response?.jobs[0]?.id, "search-b-1");
+  assert.deepEqual(state.expandedJobIds, {});
+
+  // 5. Myös keskeytyksen jälkeinen myöhäinen resolve jää huomioimatta
+  let resolveC!: (value: typeof initialResponse) => void;
+  const runCPromise = session.execute(
+    () =>
+      new Promise<typeof initialResponse>((res) => {
+        resolveC = res;
+      })
+  );
+  assert.equal(session.cancel(), true);
+  resolveC(initialResponse);
+  const outcomeC = await runCPromise;
+  assert.equal(outcomeC.status, "ignored");
+  assert.equal(state.isSearching, false);
+  assert.equal(state.response?.jobs[0]?.id, "search-b-1");
+  assert.equal(state.cancelledMessage, DISCOVERY_CANCELLED_MESSAGE);
+
+  // 6. Aktiivisen haun todellinen virhe päivittää errorMessagen ja nollaa isSearching-tilan
+  const failedOutcome = await session.execute(async () => {
+    throw new Error("Palvelinvirhe 502");
+  });
+  assert.equal(failedOutcome.status, "ignored");
+  assert.equal(state.isSearching, false);
+  assert.equal(state.errorMessage, "Palvelinvirhe 502");
+});
+
+test("Tapaus 54 (0.3.1 E part 3): Siirtovahvistuksen kaikki tilat ja React-näkymien palvelinpuolen renderöintitarkistus", () => {
+  assert.equal(
+    shouldConfirmDiscoveryTransfer({
+      isLoading: true,
+      isFetchingJob: false,
+      jobText: "",
+      jobUrl: "",
+      hasResult: false,
+    }),
+    true
+  );
+  assert.equal(
+    shouldConfirmDiscoveryTransfer({
+      isLoading: false,
+      isFetchingJob: true,
+      jobText: "",
+      jobUrl: "",
+      hasResult: false,
+    }),
+    true
+  );
+  assert.equal(
+    shouldConfirmDiscoveryTransfer({
+      isLoading: false,
+      isFetchingJob: false,
+      jobText: "Tekstiä",
+      jobUrl: "",
+      hasResult: false,
+    }),
+    true
+  );
+  assert.equal(
+    shouldConfirmDiscoveryTransfer({
+      isLoading: false,
+      isFetchingJob: false,
+      jobText: "",
+      jobUrl: "",
+      hasResult: true,
+    }),
+    true
+  );
+
+  const discoverHtml = renderToStaticMarkup(
+    React.createElement(DiscoverJobsView, {
+      profile: DEFAULT_CANDIDATE_PROFILE,
+      onSelectJobForAnalysis: () => {},
+      onGoToProfile: () => {},
+    })
+  );
+  assert.match(discoverHtml, /Hae työpaikkoja/);
+  assert.match(discoverHtml, /Hoxhunt \(Ashby\)/);
+
+  const analyzeHtml = renderToStaticMarkup(
+    React.createElement(AnalyzeView, {
+      profile: DEFAULT_CANDIDATE_PROFILE,
+      savedJobs: [],
+      onSaveNewJob: () => {},
+      onUpdateExistingJob: () => {},
+      onInspectSavedJob: () => {},
+    })
+  );
+  assert.match(analyzeHtml, /Analysoi ilmoitus/);
+  assert.match(analyzeHtml, /Hae ilmoituksen sisältö/);
+});
+
+
 
 
 

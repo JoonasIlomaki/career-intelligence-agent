@@ -46,26 +46,96 @@ const FINLAND_WORDS = [
   "rovaniemi",
 ];
 
+const FINLAND_COUNTRY_VALUES = new Set(["finland", "suomi", "fi", "fin"]);
+
 const NON_FINLAND_COUNTRIES = new Set([
   "USA",
+  "US",
+  "United States",
   "Yhdysvallat",
   "Iso-Britannia",
   "United Kingdom",
+  "UK",
+  "GB",
   "Singapore",
+  "SG",
   "Filippiinit",
+  "Philippines",
+  "PH",
   "Meksiko",
+  "Mexico",
+  "MX",
   "Intia",
+  "India",
+  "IN",
   "Saksa",
+  "Germany",
+  "DE",
   "Ruotsi",
   "Sweden",
+  "SE",
   "Norja",
+  "Norway",
+  "NO",
   "Tanska",
+  "Denmark",
+  "DK",
   "Alankomaat",
+  "Netherlands",
+  "NL",
   "Ranska",
+  "France",
+  "FR",
   "Espanja",
+  "Spain",
+  "ES",
   "Kanada",
+  "Canada",
+  "CA",
   "Australia",
+  "AU",
+  "Viro",
+  "Estonia",
+  "EE",
+  "Puola",
+  "Poland",
+  "PL",
+  "Irlanti",
+  "Ireland",
+  "IE",
+  "Sveitsi",
+  "Switzerland",
+  "CH",
 ]);
+
+const NON_FINLAND_COUNTRY_LOWER = new Set(
+  [...NON_FINLAND_COUNTRIES].map((c) => c.toLowerCase())
+);
+
+const FOREIGN_LOCATION_PATTERN =
+  /\b(usa|u\.s\.a\.|united\s+states|yhdysvallat|minneapolis|singapore|manila|philippines|filippiinit|mexico|meksiko|bangalore|bengaluru|india|intia|berlin|munich|münchen|frankfurt|hamburg|germany|saksa|london|manchester|united\s+kingdom|iso-britannia|stockholm|gothenburg|malmö|malmo|sweden|ruotsi|oslo|norway|norja|copenhagen|denmark|tanska|amsterdam|netherlands|alankomaat|paris|france|ranska|madrid|barcelona|spain|espanja|toronto|vancouver|canada|kanada|sydney|melbourne|australia|tallinn|estonia|viro|warsaw|poland|puola|dublin|ireland|irlanti|zurich|zürich|switzerland|sveitsi)\b/i;
+
+const MISSING_LOCATION_TOKENS = new Set([
+  "",
+  "ei ilmoitettu",
+  "unknown",
+  "tbd",
+  "not specified",
+  "n/a",
+]);
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function containsWholePlaceTerm(text: string, term: string): boolean {
+  if (!text || !term) return false;
+  const pattern = new RegExp(
+    `(?:^|[^a-z0-9äöå])${escapeRegExp(term)}(?:$|[^a-z0-9äöå])`,
+    "i"
+  );
+  return pattern.test(text);
+}
 
 const EXPLICIT_ENTRY_TITLE_OR_DESC =
   /\b(intern|internship|trainee|harjoittelija|harjoittelu|kesätyö|kesäharjoittelija|summer\s+intern|summer\s+trainee|junior|jr\.?|entry[-\s]?level|opinnäytetyö|thesis\s+worker|graduate\s+program|apprentice)\b/i;
@@ -91,8 +161,8 @@ const INDIRECT_IT_TITLE =
 const NON_IT_ROLE_TITLE =
   /\b(marketing|markkinointi|sales\b|myynti|account\s+executive|business\s+development|bdr\b|sdr\b|recruiter|rekrytointi|talent\s+acquisition|hr\b|human\s+resources|people\s+partner|people\s+operations|finance|accounting|accountant|controller|taloushallinto|legal|counsel|office\s+manager|receptionist|copywriter|brand\s+manager|customer\s+success\s+manager|client\s+partner|partner\s+manager|media\s+buyer|paid\s+social)\b/i;
 
-const CERTIFICATION_REQUIREMENT_PATTERN =
-  /\b(cissp|cism|cisa|oscp|ceh|security\+|az-500|sc-200|sc-300|ccsp|giac|gsec)\b/gi;
+const CERTIFICATION_MATCH_PATTERN =
+  /(?:^|[^a-z0-9äöå])(cissp|cism|cisa|oscp|ceh|security\+|az-500|sc-200|sc-300|ccsp|giac|gsec)(?=$|[^a-z0-9äöå])/gi;
 
 const FINNISH_LANGUAGE_REQUIRED_PATTERN =
   /\b(fluent\s+finnish|sujuva(?:a)?\s+suome(?:a|n)|erinomainen\s+suomen\s+kieli|finnish\s+(?:is\s+)?required|edellytämme\s+(?:hyvää|sujuvaa)\s+suomen)\b/i;
@@ -244,32 +314,71 @@ function evaluateLocationAndRemote(
   job: DiscoveredJob,
   preferences: DiscoverySearchPreferences
 ): LocationEvaluation {
-  const locLower = `${job.location} ${job.country}`.toLowerCase();
+  const locationText = job.location.trim();
+  const countryText = job.country.trim();
+  const locationLower = locationText.toLowerCase();
+  const countryLower = countryText.toLowerCase();
   const queryLower = preferences.locationQuery.trim().toLowerCase();
 
-  const mentionsUusimaa = UUSIMAA_LOCATIONS.some((city) => locLower.includes(city));
-  const mentionsFinland =
-    job.country === "Finland" || FINLAND_WORDS.some((w) => locLower.includes(w));
+  const countryExplicitFinland = FINLAND_COUNTRY_VALUES.has(countryLower);
+  const countryExplicitForeign = NON_FINLAND_COUNTRY_LOWER.has(countryLower);
+  const countryMixedIncludingFinland =
+    countryLower.includes("useita maita") && countryLower.includes("suomi");
+
+  const locationHasUusimaa = UUSIMAA_LOCATIONS.some((city) =>
+    containsWholePlaceTerm(locationText, city)
+  );
+  const locationHasFinland = FINLAND_WORDS.some((w) =>
+    containsWholePlaceTerm(locationText, w)
+  );
+  const locationHasForeign = FOREIGN_LOCATION_PATTERN.test(locationText);
+
+  const isConflictingCountryAndCity =
+    countryExplicitForeign && locationHasFinland;
+  const isMultiLocationMixed =
+    !countryExplicitForeign &&
+    (countryMixedIncludingFinland ||
+      (locationHasFinland && locationHasForeign));
+
+  // Explicit foreign country metadata overrides city tokens (e.g. { location: "Helsinki", country: "DE" })
   const isForeignCountry =
-    !mentionsFinland &&
-    (NON_FINLAND_COUNTRIES.has(job.country) ||
-      /\b(usa|united states|minneapolis|singapore|manila|mexico|bangalore|bengaluru|berlin|london|stockholm|oslo|copenhagen)\b/i.test(
-        locLower
-      ));
+    countryExplicitForeign || (!locationHasFinland && locationHasForeign);
+
+  const isPureFinlandDomestic =
+    !isForeignCountry &&
+    !isMultiLocationMixed &&
+    (countryExplicitFinland || locationHasFinland);
+
   const isRemoteFinlandConfirmed =
     job.remoteType === "remote" &&
-    (mentionsFinland || /suomi mainittu/i.test(job.remoteEligibilityNote));
+    !isForeignCountry &&
+    !isMultiLocationMixed &&
+    (countryExplicitFinland ||
+      locationHasFinland ||
+      /suomi mainittu/i.test(job.remoteEligibilityNote));
+
   const isRemoteWithoutFinland =
-    job.remoteType === "remote" && !isRemoteFinlandConfirmed && !isForeignCountry;
+    job.remoteType === "remote" &&
+    !isRemoteFinlandConfirmed &&
+    !isForeignCountry &&
+    !isMultiLocationMixed;
+
   const isMissingLocation =
-    job.location === "Ei ilmoitettu" && job.country === "Ei ilmoitettu";
+    MISSING_LOCATION_TOKENS.has(locationLower) &&
+    MISSING_LOCATION_TOKENS.has(countryLower);
+
+  const isFinlandCityMissingOnly =
+    MISSING_LOCATION_TOKENS.has(locationLower) && countryExplicitFinland;
 
   // 1. Remote mode filter
-  if (preferences.remotePreference === "onsite_or_hybrid" && job.remoteType === "remote") {
+  if (
+    preferences.remotePreference === "onsite_or_hybrid" &&
+    job.remoteType === "remote"
+  ) {
     return {
       matchesFilter: false,
       isFinlandConfirmed: isRemoteFinlandConfirmed,
-      isLocationUncertain: false,
+      isLocationUncertain: isMultiLocationMixed,
       isExplicitlyForeign: isForeignCountry,
       reason: null,
       uncertainty: null,
@@ -281,8 +390,8 @@ function evaluateLocationAndRemote(
   ) {
     return {
       matchesFilter: false,
-      isFinlandConfirmed: mentionsFinland,
-      isLocationUncertain: false,
+      isFinlandConfirmed: isPureFinlandDomestic,
+      isLocationUncertain: isMultiLocationMixed,
       isExplicitlyForeign: isForeignCountry,
       reason: null,
       uncertainty: null,
@@ -290,20 +399,22 @@ function evaluateLocationAndRemote(
   }
 
   // 2. Foreign rejection when Finland-compatible or Finnish location query active
+  const queryTokens = queryLower
+    .split(/[,/\s]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+  const queryHasFinlandTerm = queryTokens.some((tok) =>
+    FINLAND_WORDS.includes(tok)
+  );
   const wantsFinland =
     preferences.remotePreference === "finland_compatible" ||
-    Boolean(
-      queryLower &&
-        (FINLAND_WORDS.some((w) => queryLower.includes(w)) ||
-          queryLower.includes("suomi") ||
-          queryLower.includes("finland"))
-    );
+    queryHasFinlandTerm;
 
   if (wantsFinland && isForeignCountry) {
     return {
       matchesFilter: false,
       isFinlandConfirmed: false,
-      isLocationUncertain: false,
+      isLocationUncertain: isConflictingCountryAndCity,
       isExplicitlyForeign: true,
       reason: null,
       uncertainty: null,
@@ -312,17 +423,60 @@ function evaluateLocationAndRemote(
 
   // 3. Explicit non-remote location query check
   if (queryLower) {
-    const queryTokens = queryLower
-      .split(/[,/\s]+/)
-      .map((t) => t.trim())
-      .filter((t) => t.length >= 2);
-    const wantsUusimaa = UUSIMAA_LOCATIONS.some((u) => queryLower.includes(u));
+    const wantsCountryWideFinland = queryTokens.some(
+      (tok) => tok === "suomi" || tok === "finland"
+    );
+    const wantsUusimaaRegion = queryTokens.some((tok) => tok === "uusimaa");
+    const specificCityTokens = queryTokens.filter(
+      (tok) => tok !== "suomi" && tok !== "finland" && tok !== "uusimaa"
+    );
+
+    const specificCityHit = specificCityTokens.some((tok) =>
+      containsWholePlaceTerm(locationText, tok)
+    );
+    const uusimaaRegionHit = wantsUusimaaRegion && locationHasUusimaa;
+    const countryWideHit =
+      wantsCountryWideFinland &&
+      (locationHasFinland ||
+        countryExplicitFinland ||
+        isRemoteFinlandConfirmed ||
+        isMultiLocationMixed);
 
     const directQueryHit =
-      queryTokens.some((tok) => locLower.includes(tok)) ||
-      (wantsUusimaa && mentionsUusimaa);
+      specificCityHit || uusimaaRegionHit || countryWideHit;
 
     if (directQueryHit) {
+      if (isForeignCountry) {
+        return {
+          matchesFilter: false,
+          isFinlandConfirmed: false,
+          isLocationUncertain: true,
+          isExplicitlyForeign: true,
+          reason: null,
+          uncertainty: null,
+        };
+      }
+      if (isMultiLocationMixed) {
+        return {
+          matchesFilter: true,
+          isFinlandConfirmed: false,
+          isLocationUncertain: true,
+          isExplicitlyForeign: false,
+          reason: null,
+          uncertainty: `Ilmoituksessa mainitaan useita toimipaikkoja (${job.location}) — varmista ensisijainen sijainti ja Suomessa työskentely ilmoituksesta.`,
+        };
+      }
+      if (isFinlandCityMissingOnly) {
+        return {
+          matchesFilter: true,
+          isFinlandConfirmed: false,
+          isLocationUncertain: true,
+          isExplicitlyForeign: false,
+          reason: null,
+          uncertainty:
+            "Ilmoituksen maakoodi on Suomi, mutta kaupunkia ei ole erikseen ilmoitettu — tarkista tarkka sijainti.",
+        };
+      }
       return {
         matchesFilter: true,
         isFinlandConfirmed: true,
@@ -333,7 +487,7 @@ function evaluateLocationAndRemote(
       };
     }
 
-    // Remote explicitly confirmed for Finland satisfies Finnish location queries (e.g. Uusimaa)
+    // Remote explicitly confirmed for Finland satisfies Finnish location queries (e.g. Uusimaa / Suomi / Helsinki)
     if (isRemoteFinlandConfirmed && wantsFinland) {
       return {
         matchesFilter: true,
@@ -346,7 +500,10 @@ function evaluateLocationAndRemote(
     }
 
     // Remote without Finland confirmation is allowed ONLY with explicit uncertainty warning (never marked Finland-confirmed)
-    if (isRemoteWithoutFinland && preferences.remotePreference !== "onsite_or_hybrid") {
+    if (
+      isRemoteWithoutFinland &&
+      preferences.remotePreference !== "onsite_or_hybrid"
+    ) {
       return {
         matchesFilter: true,
         isFinlandConfirmed: false,
@@ -371,8 +528,8 @@ function evaluateLocationAndRemote(
       };
     }
 
-    // Another Finnish city (e.g. Tampere when user typed Uusimaa)
-    if (mentionsFinland) {
+    // Another Finnish city (e.g. Espoo when user typed Helsinki, or Tampere when user typed Uusimaa)
+    if (isPureFinlandDomestic) {
       return {
         matchesFilter: false,
         isFinlandConfirmed: true,
@@ -394,6 +551,28 @@ function evaluateLocationAndRemote(
   }
 
   // No specific locationQuery typed
+  if (isConflictingCountryAndCity) {
+    return {
+      matchesFilter: true,
+      isFinlandConfirmed: false,
+      isLocationUncertain: true,
+      isExplicitlyForeign: true,
+      reason: null,
+      uncertainty: `Sijainti (${job.location}) ja maakoodi (${job.country}) ovat ristiriitaiset — ei voida vahvistaa Suomessa tehtäväksi työksi.`,
+    };
+  }
+
+  if (isMultiLocationMixed) {
+    return {
+      matchesFilter: true,
+      isFinlandConfirmed: false,
+      isLocationUncertain: true,
+      isExplicitlyForeign: false,
+      reason: null,
+      uncertainty: `Ilmoituksessa mainitaan useita toimipaikkoja (${job.location}) — varmista ensisijainen sijainti ja Suomessa työskentely ilmoituksesta.`,
+    };
+  }
+
   if (isRemoteWithoutFinland) {
     return {
       matchesFilter: true,
@@ -417,19 +596,132 @@ function evaluateLocationAndRemote(
     };
   }
 
+  if (isFinlandCityMissingOnly) {
+    return {
+      matchesFilter: true,
+      isFinlandConfirmed: false,
+      isLocationUncertain: true,
+      isExplicitlyForeign: false,
+      reason: null,
+      uncertainty:
+        "Ilmoituksen maakoodi on Suomi, mutta kaupunkia ei ole erikseen ilmoitettu.",
+    };
+  }
+
   return {
     matchesFilter: true,
-    isFinlandConfirmed: mentionsFinland || isRemoteFinlandConfirmed,
+    isFinlandConfirmed: isPureFinlandDomestic || isRemoteFinlandConfirmed,
     isLocationUncertain: false,
     isExplicitlyForeign: isForeignCountry,
     reason:
-      mentionsFinland || isRemoteFinlandConfirmed
+      isPureFinlandDomestic || isRemoteFinlandConfirmed
         ? `Sijainti (${job.location}) sopii Suomesta työskentelyyn.`
         : null,
     uncertainty: isForeignCountry
       ? `Sijainti (${job.location}) on Suomen ulkopuolella.`
       : null,
   };
+}
+
+function extractUniqueCertifications(text: string): string[] {
+  const found = new Set<string>();
+  const regex = new RegExp(CERTIFICATION_MATCH_PATTERN.source, "gi");
+  for (const match of text.matchAll(regex)) {
+    if (match[1]) {
+      found.add(match[1].toUpperCase());
+    }
+  }
+  return [...found];
+}
+
+function profileConfirmsEarnedCertification(
+  profile: CandidateProfile | undefined,
+  certUpper: string
+): boolean {
+  if (!profile) return false;
+  const certRegex = new RegExp(
+    `(?:^|[^a-z0-9äöå])${escapeRegExp(certUpper)}(?=$|[^a-z0-9äöå])`,
+    "i"
+  );
+  const negationCue =
+    /\b(ei\b|en\s+ole|puuttuu|ilman|not\s+certified|no\s+cert|without|missing)\b/i;
+  const studyOrPrepCue =
+    /\b(opintojakso|opintokokonaisu|kurssi|koulutus|valmistau|valmentava|harjoit|aihealue|linjattu|perustuva|tavoitteena|suunnitteilla|course|coursework|study|studying|aligned|prep|preparation|training|bootcamp)\b/i;
+  const earnedCue =
+    /\b(sertifikaat\w*|sertifioi\w*|voimassa\s+oleva\w*|suoritettu\w*|läpäisty|certified|certification\w*|earned|passed|active|valid|holds)\b/i;
+
+  const profileSources = [
+    { text: profile.technicalSkills, fromCourseworkField: false },
+    { text: profile.headline, fromCourseworkField: false },
+    { text: profile.previousItInternship, fromCourseworkField: false },
+    { text: profile.otherWorkExperience, fromCourseworkField: false },
+    { text: profile.coursework, fromCourseworkField: true },
+  ];
+
+  for (const source of profileSources) {
+    const clauses = source.text.split(/[.\n;]+/);
+    for (const rawClause of clauses) {
+      const clause = rawClause.trim();
+      if (!clause || !certRegex.test(clause)) continue;
+      if (negationCue.test(clause)) continue;
+      if (studyOrPrepCue.test(clause)) continue;
+      if (earnedCue.test(clause)) {
+        return true;
+      }
+      // In coursework, require explicit earned certification phrasing (never bare acronym)
+      if (source.fromCourseworkField) continue;
+    }
+  }
+
+  return false;
+}
+
+type CertRequirementKind = "mandatory" | "preferred" | "unclear";
+
+function classifyJobCertMentions(
+  description: string,
+  certs: string[]
+): Map<string, CertRequirementKind> {
+  const result = new Map<string, CertRequirementKind>();
+  const clauses = description.slice(0, 6000).split(/[.\n;!?]+/);
+  const mandatoryCue =
+    /\b(required|mandatory|must\s+have|must\s+hold|prerequisite|vaaditaan|edellytetään|edellytämme|pakollinen|pakollisena|ehdoton|vaatimuksena)\b/i;
+  const preferredCue =
+    /\b(preferred|nice\s+to\s+have|nice-to-have|bonus|plus|asset|advantage|desired|desirable|merit|eduksi|katsotaan\s+eduksi|plussaa|arvostamme|toivottavaa|ei\s+pakollinen|optional)\b/i;
+
+  for (const cert of certs) {
+    const certRegex = new RegExp(
+      `(?:^|[^a-z0-9äöå])${escapeRegExp(cert)}(?=$|[^a-z0-9äöå])`,
+      "i"
+    );
+    let sawMandatory = false;
+    let sawPreferred = false;
+
+    for (const rawClause of clauses) {
+      const clause = rawClause.trim();
+      if (!clause || !certRegex.test(clause)) continue;
+      const hasMandatory = mandatoryCue.test(clause);
+      const hasPreferred = preferredCue.test(clause);
+      if (hasMandatory && !hasPreferred) {
+        sawMandatory = true;
+      } else if (hasPreferred && !hasMandatory) {
+        sawPreferred = true;
+      } else if (hasMandatory && hasPreferred) {
+        // Mixed phrasing in one clause remains unclear rather than guaranteed preferred
+        sawMandatory = false;
+      }
+    }
+
+    if (sawMandatory) {
+      result.set(cert, "mandatory");
+    } else if (sawPreferred) {
+      result.set(cert, "preferred");
+    } else {
+      result.set(cert, "unclear");
+    }
+  }
+
+  return result;
 }
 
 interface ProfileKeywordOverlap {
@@ -446,25 +738,42 @@ const PROFILE_TRACKED_TERMS: Array<{ label: string; pattern: RegExp }> = [
   { label: "Git", pattern: /\bgit\b/i },
   { label: "Pilvi-infra", pattern: /\b(cloud|pilvi|aws|azure|gcp)\b/i },
   { label: "Tietoverkot", pattern: /\b(network|tietoliikenneverk|verkko|tcp\/ip|dns)\b/i },
-  { label: "Tietoturva", pattern: /\b(security|tietoturva|kyber|iam|soc|siem|splunk)\b/i },
+  { label: "Tietoturva", pattern: /\b(security(?!\+)|tietoturva|kyber|iam|soc|siem|splunk)\b/i },
   { label: "IT-tuki / Service Desk", pattern: /\b(it\s+support|service\s+desk|helpdesk|käyttäjätuki|it-tuki|tikett|käyttötuki)\b/i },
   { label: "AI / kielimallit", pattern: /\b(ai\b|llm|machine\s+learning|kielimalli|tekoäly)\b/i },
 ];
+
+function stripUnverifiedCertClausesFromCorpus(text: string): string {
+  return text
+    .split(/[.\n;]+/)
+    .filter((clause) => {
+      const hasCert = extractUniqueCertifications(clause).length > 0;
+      if (!hasCert) return true;
+      const isPrepOrNegation =
+        /\b(valmistau|valmentava|ei\b|puuttuu|linjattu|prep|studying)\b/i.test(
+          clause
+        );
+      return !isPrepOrNegation;
+    })
+    .join(". ");
+}
 
 function computeProfileOverlap(
   job: DiscoveredJob,
   profile: CandidateProfile
 ): ProfileKeywordOverlap {
-  const profileCorpus = [
-    profile.headline,
-    profile.institutionAndDegree,
-    profile.previousItInternship,
-    profile.coursework,
-    profile.technicalSkills,
-    profile.aiExperienceNote,
-    profile.otherWorkExperience,
-    profile.careerGoals,
-  ].join("\n");
+  const profileCorpus = stripUnverifiedCertClausesFromCorpus(
+    [
+      profile.headline,
+      profile.institutionAndDegree,
+      profile.previousItInternship,
+      profile.coursework,
+      profile.technicalSkills,
+      profile.aiExperienceNote,
+      profile.otherWorkExperience,
+      profile.careerGoals,
+    ].join("\n")
+  );
 
   const jobCorpus = `${job.title}\n${job.department}\n${job.description.slice(0, 5000)}`;
 
@@ -552,7 +861,7 @@ export function scoreDiscoveredJob(
   }
 
   const matchReasons: string[] = [];
-  const uncertainties: string[] = [];
+  const uncertainties: string[] = [...job.uncertainties];
   let score = 40;
 
   if (seniority.kind === "explicit_entry") {
@@ -597,32 +906,41 @@ export function scoreDiscoveredJob(
     score -= 25;
   }
 
-  // Check concrete requirement friction in description
-  const profileLower = profile
-    ? `${profile.technicalSkills} ${profile.coursework} ${profile.previousItInternship}`.toLowerCase()
-    : "";
-
-  const certMatches = job.description.match(CERTIFICATION_REQUIREMENT_PATTERN) ?? [];
-  const uniqueCerts = [...new Set(certMatches.map((c) => c.toUpperCase()))];
+  // Check certification requirements vs earned certifications in profile (distinct from coursework/prep)
+  const uniqueCerts = extractUniqueCertifications(job.description);
   const unverifiedCerts = uniqueCerts.filter(
-    (cert) => !profileLower.includes(cert.toLowerCase())
+    (cert) => !profileConfirmsEarnedCertification(profile, cert)
   );
-  if (unverifiedCerts.length > 0) {
-    const certContext = job.description.slice(0, 4000);
-    const certMandatoryCue = /\b(required|mandatory|vaaditaan|edellytämme|pakollinen)\b[^.\n]{0,60}\b(cissp|cism|cisa|oscp|ceh|security\+|az-500)\b/i.test(
-      certContext
+  const certKinds = classifyJobCertMentions(job.description, unverifiedCerts);
+  const mandatoryUnverified = unverifiedCerts.filter(
+    (c) => certKinds.get(c) === "mandatory"
+  );
+  const unclearUnverified = unverifiedCerts.filter(
+    (c) => certKinds.get(c) === "unclear"
+  );
+  const preferredUnverified = unverifiedCerts.filter(
+    (c) => certKinds.get(c) === "preferred"
+  );
+
+  if (mandatoryUnverified.length > 0) {
+    score -= 18;
+    uncertainties.push(
+      `Tarkistettava kelpoisuus: ilmoitus mainitsee pakollisena sertifikaatin (${mandatoryUnverified.join(", ")}), jonka suorittamisesta ei ole profiilissa vahvistettua mainintaa.`
     );
-    if (certMandatoryCue) {
-      score -= 18;
-      uncertainties.push(
-        `Ilmoitus mainitsee pakollisena tai keskeisenä sertifikaatin (${unverifiedCerts.join(", ")}), jota ei löydy profiilista.`
-      );
-    } else {
-      uncertainties.push(
-        `Ilmoituksessa mainitaan sertifikaatti (${unverifiedCerts.join(", ")}) — tarkista, onko kyse pakollisesta vai toivotusta edellytyksestä.`
-      );
-    }
   }
+  if (unclearUnverified.length > 0) {
+    uncertainties.push(
+      `Tarkistettava: ilmoituksessa mainitaan sertifikaatti (${unclearUnverified.join(", ")}), jonka suorittamisesta ei ole profiilissa vahvistettua mainintaa — tarkista, onko kyse pakollisesta vai toivotusta edellytyksestä.`
+    );
+  }
+  if (preferredUnverified.length > 0) {
+    uncertainties.push(
+      `Toivottu / eduksi katsottu sertifikaatti (${preferredUnverified.join(", ")}): profiilissa ei ole vahvistettua mainintaa sertifikaatin suorittamisesta, mutta kyse ei ole pakollisesta esteestä.`
+    );
+  }
+
+  const hasBlockingUnverifiedCert =
+    mandatoryUnverified.length > 0 || unclearUnverified.length > 0;
 
   if (
     ELIGIBILITY_CLAUSE_PATTERN.test(job.description) &&
@@ -706,7 +1024,7 @@ export function scoreDiscoveredJob(
   } else if (
     locationEval.isLocationUncertain ||
     job.deadlineStatus === "conflicting" ||
-    unverifiedCerts.length > 0 ||
+    hasBlockingUnverifiedCert ||
     seniority.kind === "unclear"
   ) {
     suitabilityCategory = "Vaatii lisätarkistusta";
@@ -739,7 +1057,7 @@ export function scoreDiscoveredJob(
       discoveryScore: clampedScore,
       suitabilityCategory,
       matchReasons,
-      uncertainties,
+      uncertainties: [...new Set(uncertainties)],
       cyberPathwayNote: domain.cyberPathwayNote,
     },
   };
