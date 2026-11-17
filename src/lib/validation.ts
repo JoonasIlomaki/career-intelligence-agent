@@ -735,3 +735,30 @@ export const fetchJobRequestSchema = z.object({
     .max(2048, "URL-osoite on liian pitkä."),
 });
 
+export const discoveryPreferencesSchema = z.object({
+  useSavedProfile: z.boolean().default(true),
+  seniorityLevel: z
+    .enum(["intern_trainee_junior", "all"])
+    .default("intern_trainee_junior"),
+  locationQuery: z.string().trim().max(120).default("Uusimaa"),
+  remotePreference: z
+    .enum(["finland_compatible", "onsite_or_hybrid", "remote_only", "any"])
+    .default("finland_compatible"),
+  industryFocus: z
+    .enum(["it_cyber_and_pathways", "all"])
+    .default("it_cyber_and_pathways"),
+  languages: z
+    .array(z.enum(["fi", "en"]))
+    .min(1)
+    .max(2)
+    .default(["fi", "en"]),
+  keyword: z.string().trim().max(120).default(""),
+});
+
+export const discoverJobsRequestSchema = z.object({
+  preferences: discoveryPreferencesSchema,
+  profile: candidateProfileSchema.optional(),
+  isDefaultProfile: z.boolean().optional().default(false),
+  sourceIds: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
+});
+

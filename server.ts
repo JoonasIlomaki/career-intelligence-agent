@@ -5,10 +5,13 @@ import path from "path";
 import { fileURLToPath } from "url";
 import {
   analyzeRequestSchema,
+  discoverJobsRequestSchema,
   fetchJobRequestSchema,
 } from "./src/lib/validation.ts";
 import { analyzeJobPosting, AnalysisError } from "./server/analyzeJob.ts";
 import { fetchJobFromUrl, JobFetchError } from "./server/fetchJob.ts";
+import { discoverJobs } from "./server/jobDiscovery/discoverJobs.ts";
+import { DiscoverySourceError } from "./server/jobDiscovery/httpClient.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -120,6 +123,57 @@ async function startServer() {
       console.error("Unexpected job fetch failure:", error);
       res.status(500).json({
         error: "Ilmoituksen nouto epäonnistui odottamattoman palvelinvirheen vuoksi. Voit liittää ilmoitustekstin käsin.",
+      });
+    } finally {
+      req.off("aborted", handleClientDisconnect);
+      res.off("close", handleClientDisconnect);
+    }
+  });
+
+  app.post("/api/discover-jobs", async (req, res) => {
+    const parsedReq = discoverJobsRequestSchema.safeParse(req.body);
+    if (!parsedReq.success) {
+      const firstIssue = parsedReq.error.issues[0];
+      res.status(400).json({
+        error: firstIssue?.message ?? "Virheellinen työpaikkahaun pyyntö.",
+      });
+      return;
+    }
+
+    const controller = new AbortController();
+    const handleClientDisconnect = () => {
+      if (!res.writableFinished) {
+        controller.abort();
+      }
+    };
+
+    req.on("aborted", handleClientDisconnect);
+    res.on("close", handleClientDisconnect);
+
+    try {
+      const result = await discoverJobs(parsedReq.data, {
+        signal: controller.signal,
+      });
+
+      if (controller.signal.aborted || res.writableEnded || res.destroyed) {
+        return;
+      }
+
+      res.json(result);
+    } catch (error) {
+      if (controller.signal.aborted || res.writableEnded || res.destroyed) {
+        return;
+      }
+
+      if (error instanceof DiscoverySourceError) {
+        res.status(error.statusCode).json({ error: error.message });
+        return;
+      }
+
+      console.error("Unexpected job discovery failure:", error);
+      res.status(500).json({
+        error:
+          "Työpaikkojen haku epäonnistui odottamattoman palvelinvirheen vuoksi.",
       });
     } finally {
       req.off("aborted", handleClientDisconnect);

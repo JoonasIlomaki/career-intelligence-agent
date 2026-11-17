@@ -236,3 +236,109 @@ export interface FetchedJobResult {
   fetchedAt: string;
 }
 
+export type JobDiscoverySourceType = "ashby" | "greenhouse" | "lever";
+
+export type DiscoveryRemoteType = "remote" | "hybrid" | "onsite" | "unknown";
+
+export type DiscoverySuitabilityCategory =
+  | "Erittäin kiinnostava"
+  | "Mahdollisesti sopiva"
+  | "Vaatii lisätarkistusta"
+  | "Heikko vastaavuus";
+
+export type DiscoverySeniorityFilter = "intern_trainee_junior" | "all";
+
+export type DiscoveryRemoteFilter =
+  | "finland_compatible"
+  | "onsite_or_hybrid"
+  | "remote_only"
+  | "any";
+
+export type DiscoveryIndustryFilter = "it_cyber_and_pathways" | "all";
+
+export type DiscoveryLanguageCode = "fi" | "en";
+
+export interface DiscoverySearchPreferences {
+  useSavedProfile: boolean;
+  seniorityLevel: DiscoverySeniorityFilter;
+  locationQuery: string;
+  remotePreference: DiscoveryRemoteFilter;
+  industryFocus: DiscoveryIndustryFilter;
+  languages: DiscoveryLanguageCode[];
+  keyword: string;
+}
+
+export interface DiscoveredJob {
+  id: string;
+  source: JobDiscoverySourceType;
+  employerId: string;
+  sourceJobId: string;
+  company: string;
+  title: string;
+  location: string;
+  country: string;
+  remoteType: DiscoveryRemoteType;
+  remoteEligibilityNote: string;
+  employmentType: string;
+  department: string;
+  description: string;
+  descriptionFullLength: number;
+  isDescriptionTruncatedForAnalysis: boolean;
+  jobUrl: string;
+  publishedAt: string | null;
+  updatedAt: string | null;
+  retrievedAt: string;
+  deadline: string | null;
+  deadlineStatus: "valid" | "expired" | "conflicting" | "unknown";
+  language: "fi" | "en" | "other" | "Ei ilmoitettu";
+  discoveryScore: number;
+  suitabilityCategory: DiscoverySuitabilityCategory;
+  matchReasons: string[];
+  uncertainties: string[];
+  cyberPathwayNote: string | null;
+  alternateSources?: Array<{
+    source: JobDiscoverySourceType;
+    jobUrl: string;
+    company: string;
+  }>;
+}
+
+export interface DiscoverySourceStatus {
+  employerId: string;
+  company: string;
+  source: JobDiscoverySourceType;
+  apiHost: string;
+  status: "ok" | "error" | "skipped";
+  fetchedCount: number;
+  matchedCount: number;
+  retrievedAt: string;
+  errorCode?: string;
+  errorMessage?: string;
+  rateLimited?: boolean;
+  durationMs: number;
+}
+
+export interface DiscoverJobsResponse {
+  jobs: DiscoveredJob[];
+  totalFetchedCount: number;
+  totalDeduplicatedCount: number;
+  matchedCount: number;
+  queriedSources: DiscoverySourceStatus[];
+  succeededSources: string[];
+  failedSources: Array<{
+    employerId: string;
+    company: string;
+    source: JobDiscoverySourceType;
+    reason: string;
+  }>;
+  fetchedAt: string;
+  warnings: string[];
+  profileMode: "saved_profile" | "default_example_profile" | "no_profile";
+  registryEmployers: Array<{
+    id: string;
+    company: string;
+    source: JobDiscoverySourceType;
+    active: boolean;
+  }>;
+}
+
