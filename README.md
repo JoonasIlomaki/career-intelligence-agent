@@ -52,6 +52,30 @@ The project focuses on secure API integration, structured data validation, trans
 ---
 
 
+## Kuvakaappaukset / Screenshots
+
+Alla olevat kuvakaappaukset havainnollistavat sovelluksen työnkulkua 17.11.2026. Ne ovat yksittäisen testaushetken esimerkkejä, eivätkä ilmoitusten hakutilanteet tai saatavuus välttämättä ole enää ajantasaisia.
+
+### 1. Työpaikkahaun asetukset ja lähteet
+
+Käyttäjä määrittää hakuehdot ja käynnistää julkisiin ATS-rajapintoihin perustuvan haun. Lähdekohtaiset tilat ja tulosmäärät näytetään avoimesti.
+
+![Job Discovery -haun asetukset, lähteet ja hakuyhteenveto](docs/screenshots/job-discovery-search.png)
+
+### 2. Hakutulokset ja perusteltu alustava soveltuvuusarvio
+
+Sääntöpohjainen luokittelu näyttää työnantajan ilmoituksiin perustuvia osumia, soveltuvuusperustelut sekä epävarmuudet. Käyttäjä voi avata alkuperäisen ilmoituksen tai siirtyä tarkempaan analyysiin.
+
+![Hakutulokset, alustavat soveltuvuusarviot ja epävarmuudet](docs/screenshots/job-discovery-results.png)
+
+### 3. Google Geminin tarkempi ilmoitusanalyysi
+
+Syvempi analyysi vertailee työpaikan vaatimuksia hakijaprofiiliin ja ehdottaa seuraavia toimenpiteitä. Alustava sääntöpohjainen luokittelu ja Geminin tarkempi suositus ovat eri arviointivaiheita, joten niiden johtopäätökset voivat erota toisistaan.
+
+![Gemini-analyysin soveltuvuussuositus, kriittiset perustelut ja seuraavat toimet](docs/screenshots/gemini-analysis.png)
+
+---
+
 ## 1. Projektin tavoite
 
 Career Intelligence Agent auttaa vertaamaan työpaikkailmoitusten vaatimuksia hakijan todelliseen osaamiseen, kokemukseen ja uratavoitteisiin. Sovellus on suunniteltu erityisesti IT- ja kyberturvallisuusalan harjoittelu-, trainee- ja junioritehtävien arviointiin, mutta se pystyy arvioimaan myös muita työtehtäviä.
