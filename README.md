@@ -2,9 +2,9 @@
 
 **Gemini-pohjainen työpaikkailmoitusten analysointi- ja hakukohteiden seurantatyökalu**
 
-> **Projektin tila:** Ensimmäinen MVP-versio on toiminnallisesti testattu henkilökohtaiseen käyttöön. Sovellusta ei ole arvioitu tuotantovalmiiksi eikä julkaistu julkisena palveluna.
+> **Projektin tila:** MVP-versio 0.3 (Job Discovery MVP lisätty analyysi- ja seurantatyökalun rinnalle). Sovellusta ei ole arvioitu tuotantovalmiiksi eikä julkaistu julkisena palveluna.
 >
-> **Dokumentaation tilanne:** 16.11.2026. Tiedot perustuvat tarkasteltuihin lähdekooditiedostoihin, käyttöliittymätesteihin ja Google AI Studion raportoimiin testituloksiin.
+> **Dokumentaation tilanne:** 17.11.2026. Tiedot perustuvat tarkasteltuihin lähdekooditiedostoihin, käyttöliittymä- ja komentorivitesteihin sekä erilliseen elävien ATS-rajapintojen tarkistusajoon.
 
 ## 1. Projektin tavoite
 
@@ -34,6 +34,16 @@ Käyttäjä voi liittää työpaikkailmoituksen tekstin käsin tai hakea sen tue
 - lainauksia ilmoitustekstistä sekä suositellun seuraavan toimenpiteen.
 
 Suosituskategoriat ovat **Ensisijainen hakukohde**, **Harkinnan arvoinen**, **Matala prioriteetti** ja **Jätä väliin**.
+
+### Työpaikkojen haku julkisista rajapinnoista (Job Discovery MVP)
+
+- **Käyttäjän käynnistämä haku:** **Löydä työpaikkoja** -välilehti käynnistää manuaalisesti `POST /api/discover-jobs` -haun ilman ajastettua taustahakua tai automaattista hakemusten lähettämistä.
+- **Ensimmäisen version työnantajalähderekisteri:** Kuratoitu ja modulaarinen rekisteri (`server/jobDiscovery/registry.ts`) tukee ensimmäisessä versiossa kolmea maksutonta julkista ATS GET -rajapintaa: **Ashby** (`hoxhunt` / `api.ashbyhq.com`), **Greenhouse** (`smartlyio` / `boards-api.greenhouse.io`) sekä **Lever** (`netlight` / `api.lever.co`, sovitin tukee myös `api.eu.lever.co`-osoitetta).
+- **Normalisointi, puhdistus ja kaksoiskappaleiden poisto:** Ulkoisen HTML- tai entiteettikoodatun kuvauksen vaaralliset tunnisteet (`<script>`, `<style>`, `<iframe>`, tapahtumankäsittelijät) poistetaan ja sisältö muunnetaan puhtaaksi tekstiksi (`sanitizeExternalHtmlToPlainText`). Kaksoiskappaleet yhdistetään lähde-ID:n, normalisoidun URL:n tai tarkan yritys+nimike+sijainti-yhdistelmän perusteella ilman, että eri kaupungeissa olevia samannimisiä rooleja yhdistetään virheellisesti.
+- **Konservatiivinen sääntöpohjainen suodatus ja luokittelu:** Tulokset suodatetaan käyttäjän tallennettavien hakuasetusten (`cia_discovery_preferences_v1`, oletuksena mm. harjoittelu/trainee/alkuvaihe, `Uusimaa`, Suomeen sopiva työskentelymalli, IT/kyber- ja välilliset polut, kieli fi/en) sekä valinnaisesti tallennetun hakijaprofiilin perusteella. Jokainen osuma luokitellaan sanallisesti (`Erittäin kiinnostava`, `Mahdollisesti sopiva`, `Vaatii lisätarkistusta` tai `Heikko vastaavuus`) perusteluineen ja epävarmuuksineen ilman keksittyjä prosenttilukuja tai automaattisia Gemini-kutsuja.
+- **Suora siirto analyysinäkymään:** **Analysoi tarkemmin** -painike vie valitun ilmoituksen (`formatDiscoveredJobForAnalysis`) nykyiseen **Analysoi ilmoitus** -näkymään tarkistettavaksi (suojaten olemassa olevaa tekstiä/tulosta/käynnissä olevaa hakua korvausvahvistuksella ja ilmoittaen selkeästi mahdollisesta 30 000 merkin katkaisusta tai vanhentuneesta hakuajasta).
+
+**Rajoitukset:** Haku kattaa vain lähderekisterissä määritellyt työnantajat eikä etsi koko internetistä. Ulkoisille ATS-rajapinnoille ei välitetä hakijaprofiilia. Etätyö ilman vahvistusta Suomesta työskentelyn mahdollisuudesta tai puuttuva sijainti merkitään aina lisätarkistusta vaativaksi.
 
 ### URL-pohjainen ilmoituksen lukeminen (Job URL Import)
 
@@ -81,13 +91,19 @@ Lähdekoodissa analyysimallin tunniste on `gemini-4-hydrogen`, ja analyysikutsul
 ```text
 Käyttäjä / React-käyttöliittymä
         |
+        +--> (Valinnainen työpaikkahaku: vain hakuasetukset + valinnainen paikallinen profiili palvelimelle)
+        |       POST /api/discover-jobs (server/jobDiscovery/*)
+        |       -> SSRF-/allowlist-/DNS-sidotut GET-kutsut vain julkisiin ATS-rajapintoihin (ei profiilia ulos)
+        |       -> HTML-puhdistus, normalisointi, deduplikaatio ja sääntöpohjainen alustava arvio
+        |       -> Käyttäjän valitessa: siirto analyysinäkymään (formatDiscoveredJobForAnalysis)
+        |
         +--> (Valinnainen URL-tuonti: vain { url }, ei hakijaprofiilia)
         |       POST /api/fetch-job (server/fetchJob.ts)
         |       -> SSRF-/allowlist-/DNS-/TLS-tarkistettu HTTPS-nouto
         |       -> JSON-LD + HTML-poiminta + hakuajan ristiriitatarkistus
         |       -> Teksti ja varoitukset muokattavaan tekstikenttään
         |
-        | Ilmoitusteksti + URL-viite + hakijaprofiili
+        | Ilmoitusteksti + URL-viite + hakijaprofiili (käyttäjän käynnistämänä)
         v
 POST /api/analyze  (Express / server.ts)
         |
@@ -114,23 +130,26 @@ React: analyysin näyttäminen
 
 ### Keskeiset tiedostot
 
-- `server.ts` – Express-palvelimen käynnistys, `GET /api/health`, `POST /api/analyze`, `POST /api/fetch-job`, pyyntöjen validointi ja yhteyden katkeamisen käsittely.
+- `server.ts` – Express-palvelimen käynnistys, `GET /api/health`, `POST /api/analyze`, `POST /api/fetch-job`, `POST /api/discover-jobs`, pyyntöjen validointi ja yhteyden katkeamisen käsittely.
+- `server/jobDiscovery/` – Job Discovery MVP:n palvelinmoduulit: `registry.ts` (lähderekisteri ja isäntäsallitut), `httpClient.ts` (SSRF-suojattu ja DNS-sidottu JSON-nouto, HTTP 429- ja kokorajat), `htmlSanitizer.ts` (XSS-turvallinen tekstipuhdistus), `adapters/{ashby,greenhouse,lever}.ts`, `normalize.ts`, `dedupe.ts`, `scoring.ts` ja `discoverJobs.ts` (julkisen syötteen TTL-välimuisti ja osittaisen epäonnistumisen hallinta).
 - `server/fetchJob.ts` – SSRF-suojattu ja DNS-sidottu HTTPS-nouto sallituista työpaikkaportaaleista, JSON-LD- ja HTML-sisällön poiminta, kattavuusarviointi sekä aikavyöhyke- ja kellonaikatarkka hakuajan ristiriita-arviointi.
 - `server/analyzeJob.ts` – hakijariippumaton analyysin ohjeistus (`SYSTEM_INSTRUCTION`), dynaaminen `buildPrompt()` annetulle profiilille, Gemini-kutsu, keskeytys ja analyysin virheenkäsittely.
-- `src/lib/validation.ts` – hakijaprofiilin, URL-noutopyynnön, analyysituloksen, tallennettujen hakukohteiden ja JSON-varmuuskopion Zod-skeemat sekä normalisointi (mukaan lukien `deduplicateGaps()`, hakuajan ristiriitojen säilytys ja `urlVerificationNotice`).
-- `src/lib/storage.ts` – `localStorage`-tallennus ja -luku (tallennettu profiili ohittaa oletusprofiilin) sekä JSON-varmuuskopion muodostus ja jäsentäminen.
+- `src/lib/validation.ts` – hakijaprofiilin, työpaikkahaun asetusten, URL-noutopyynnön, analyysituloksen, tallennettujen hakukohteiden ja JSON-varmuuskopion Zod-skeemat sekä normalisointi.
+- `src/lib/discoveryHandoff.ts` – löydetyn ilmoituksen siirtomuotoilu analyysinäkymään (katkaisu- ja aikarajavaroitukset), korvausvahvistuksen ehdot, turvallinen HTTPS-linkkitarkistus ja lajittelu.
+- `src/lib/storage.ts` – `localStorage`-tallennus ja -luku (profiili, tallennetut hakukohteet ja erilliset hakuasetukset `cia_discovery_preferences_v1`) sekä JSON-varmuuskopion muodostus ja jäsentäminen.
 - `src/lib/analysisRunner.ts` – käyttöliittymän analyysipyyntöjen koordinointi ja myöhästyneiden tulosten käsittely.
 - `src/lib/availability.ts` – soveltuvuuden ja manuaalisesti tarkistetun hakutilanteen erottelu.
 - `src/lib/timestamps.ts` – tallennus- ja muokkausaikaleimojen käsittely.
-- `src/types/career.ts` – tietotyyppien määrittely.
+- `src/types/career.ts` – tietotyyppien määrittely (sisältää erilliset `DiscoveredJob`- ja `DiscoverJobsResponse`-tyypit).
 - `src/data/defaultProfile.ts` – kuvitteellinen suomalaisen IT-opiskelijan oletusesimerkkiprofiili (käytössä vain, kun tallennettua profiilia ei ole).
 - `tests/regression.test.ts` – automaattiset regressio- ja integraatiotestit.
-- `src/components/` ja `App.tsx` – React-käyttöliittymä.
+- `src/components/DiscoverJobsView.tsx` ja muut `src/components/*` sekä `src/App.tsx` – React-käyttöliittymä.
 
 ### Rajapinnat
 
 - `GET /api/health` palauttaa vastauksen `{ "status": "ok" }`.
-- `POST /api/fetch-job` vastaanottaa JSON-olion `{ "url": "https://..." }` (ilman hakijaprofiilia) ja palauttaa `FetchedJobResult`-rakenteen (`url`, `canonicalUrl`, `host`, `extractionMethod`, `coverageStatus`, `text`, `warnings`, `deadlineInfo` ym.).
+- `POST /api/discover-jobs` vastaanottaa hakuasetukset (`preferences`), valinnaisen paikallisen hakijaprofiilin (`profile`, `isDefaultProfile`) ja valinnaiset `sourceIds`-tunnisteet; palauttaa `DiscoverJobsResponse`-tuloksen (`jobs`, lähdekohtaiset `queriedSources`-tilat, `succeededSources`, `failedSources`, varoitukset ja `profileMode`). Rajapintakutsut ulkoisiin ATS-palveluihin rajoitetaan enintään 4 Mt raaka-/purettuun kokoon.
+- `POST /api/fetch-job` vastaanottaa JSON-olion `{ "url": "https://..." }` (ilman hakijaprofiilia) ja palauttaa `FetchedJobResult`-rakenteen.
 - `POST /api/analyze` vastaanottaa JSON-olion, jossa ovat `jobText`, `jobUrl` ja `profile`, ja palauttaa onnistumisessa `{ "analysis": ... }`.
 
 `jobText`-kentän sallittu pituus on 40–30 000 merkkiä. `jobUrl`- ja `url`-kenttien enimmäispituus on 2 048 merkkiä. Expressin JSON-pyynnön kokoraja on 1 Mt, ja URL-nouto rajaa ladattavan vastauksen enintään 1,5 megatavuun.
@@ -172,7 +191,7 @@ Gemini API -avain määritetään **palvelimen ympäristömuuttujaksi** nimellä
 
 ### Regressio- ja integraatiotestit
 
-Viimeisimmän varmistetun testiajon mukaan `npm test` läpäisi **42/42 testiä**, `npm run lint` (`tsc --noEmit`) läpäisi TypeScript-tyyppitarkistuksen virheettä ja `npm run build` onnistui. Testit suoritetaan täysin ilman ulkoisia verkkopyyntöjä paikallisessa kehitysympäristössä.
+Viimeisimmän varmistetun testiajon mukaan `npm test` läpäisi **49/49 testiä**, `npm run lint` (`tsc --noEmit`) läpäisi TypeScript-tyyppitarkistuksen virheettä ja `npm run build` onnistui. Testit suoritetaan täysin ilman ulkoisia verkkopyyntöjä paikallisessa kehitysympäristössä.
 
 Testisarja kattaa muun muassa:
 - osaamispuutteiden ja oppimismahdollisuuksien erottelun (`deduplicateGaps()`), harjoittelun opinnollistamisen, analyysin keskeytyksen ja aikaleimat;
@@ -180,7 +199,15 @@ Testisarja kattaa muun muassa:
 - URL-validoinnin, JSON-LD- ja HTML-sisällönpoiminnan, kattavuusluokituksen (`complete` / `partial` / `uncertain`), portaalikohtaisen siivouksen sekä `Europe/Helsinki`-aikavyöhykkeen ja eksplisiittisten kellonaikojen ristiriitavertailun (`14:00` vs `16:00`, `14:00` vs `23:59`, `23:59` vs `16:15`, kesä- ja talviaika);
 - `urlVerificationNotice`-tekstin totuudenmukaisen normalisoinnin sekä URL-kohtaisissa että manuaalisissa analyyseissä;
 - **eristetyt todellisen `node:https`-kuljetuskerroksen integraatiotestit** (`executePinnedHttpsGet` paikallista itseallekirjoitettua testipalvelinta vasten): IP-osoitteen sidonta `Host`- ja SNI-otsikoilla, epäluotetun tai väärän isäntänimen TLS-varmenteen hylkäys (`rejectUnauthorized: true`), `302`-uudelleenohjauksen esto, raakavasteen ja puretun gzip-vastauksen kokoraja, HTTPS-aikakatkaisu, `AbortSignal`-keskeytys sekä DNS-haun aikakatkaisu (`504 DNS_TIMEOUT`) ja DNS-keskeytys (`499 ABORTED`);
-- **simuloidut/mockatut yksikkötestit**: `fetchJobFromUrl`-kutsut sallitun osoitelistan ulkopuolisilla/yksityisillä/IANA-varatuilla IP-avaruuksilla ja mockatuilla DNS-/HTTP-riippuvuuksilla.
+- **simuloidut/mockatut yksikkötestit**: `fetchJobFromUrl`-kutsut sekä Job Discovery MVP:n Ashby-, Greenhouse- ja Lever-sovittimet, Lever-sivutus ja silmukkakatkaisu, tyhjä työpaikkalista, HTTP 429 / aikakatkaisu / osittainen lähdevirhe, SSRF-/DNS-estot, TTL-välimuistin profiilieristys, juniori-/senior- ja ei-IT-roolien erottelu, välilliset kyberpolut, etätyö- ja sijaintiepävarmuudet, kaksoiskappaleiden esto, siirto analyysinäkymään (katkaisu- ja korvaussuoja), URL-turvallisuus sekä XSS-/prompt-injection-HTML-puhdistus.
+
+### Erillinen elävien ATS-rajapintojen tarkistusajo (17.11.2026)
+
+Kehitysympäristöstä suoritettu erillinen suora verkkotarkistus (`discoverJobs()`) tuotti seuraavat todelliset havainnot:
+- **Hoxhunt (Ashby, `api.ashbyhq.com`):** HTTP 200 OK, palautti **10** avointa ilmoitusta (91 ms).
+- **Smartly (Greenhouse, `boards-api.greenhouse.io`):** HTTP 200 OK, palautti **69** avointa ilmoitusta (228 ms).
+- **Netlight (Lever, `api.lever.co`):** aikakatkaistiin 8 s jälkeen (`TIMEOUT`), ja `api.eu.lever.co` palautti HTTP 404.
+- **Osittainen haku ja suodatus:** Yhteensä noudettiin **79** ilmoitusta kahdesta onnistuneesta lähteestä ilman palvelimen kaatumista; oletussuodattimilla (`Uusimaa`, harjoittelu/trainee/junior, IT/kyber ja välilliset polut) löytyi 2 Suomessa sijaitsevaa IT-/kehittäjäroolia (*Smartly Launchpad 2027* ja *Hoxhunt Machine Learning Engineer*). Huomio: selainnäkymän `DiscoverJobsView`- ja `AnalyzeView`-siirtoa käyttöliittymässä ei ole ajettu erikseen selainautomaatiolla.
 
 ### Prompt injection -käyttöliittymätestit
 
@@ -259,4 +286,4 @@ Suuri osa sovelluksen varsinaisesta lähdekoodista on syntynyt Google AI Studion
 
 ---
 
-**Dokumentoinnin seuraava tarkistuspiste:** pidä tämä README ajan tasalla lähdekoodin, regressio- ja integraatiotestien (`42/42`) ja julkaisuympäristön vaatimusten kanssa aina, kun toiminnallisuus, tietoturvakäytännöt tai käyttöympäristö muuttuvat olennaisesti.
+**Dokumentoinnin seuraava tarkistuspiste:** pidä tämä README ajan tasalla lähdekoodin, regressio- ja integraatiotestien (`49/49`) ja julkaisuympäristön vaatimusten kanssa aina, kun toiminnallisuus, tietoturvakäytännöt tai käyttöympäristö muuttuvat olennaisesti.

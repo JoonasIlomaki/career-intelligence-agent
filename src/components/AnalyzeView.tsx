@@ -23,6 +23,10 @@ import { AnalysisRequestCoordinator } from "../lib/analysisRunner.ts";
 import { findPotentialDuplicates } from "../lib/duplicates.ts";
 import { formatSavedJobTimestamp } from "../lib/timestamps.ts";
 import { AnalysisResultView } from "./AnalysisResultView.tsx";
+import {
+  type FormattedDiscoveryTransfer,
+  shouldConfirmDiscoveryTransfer,
+} from "../lib/discoveryHandoff.ts";
 
 interface AnalyzeViewProps {
   profile: CandidateProfile;
@@ -30,6 +34,8 @@ interface AnalyzeViewProps {
   onSaveNewJob: (entry: SavedJobEntry) => void;
   onUpdateExistingJob: (id: string, analysis: JobAnalysisResult, rawJobText: string, jobUrl: string) => void;
   onInspectSavedJob: (entry: SavedJobEntry) => void;
+  pendingDiscoveryTransfer?: FormattedDiscoveryTransfer | null;
+  onConsumeDiscoveryTransfer?: (transferId: string) => void;
 }
 
 const SAMPLE_JOB_TEXT = `Haemme Kyberturvallisuusharjoittelijaa (IAM / GRC Trainee) – Espoo / hybridi
@@ -58,6 +64,8 @@ export function AnalyzeView({
   onSaveNewJob,
   onUpdateExistingJob,
   onInspectSavedJob,
+  pendingDiscoveryTransfer = null,
+  onConsumeDiscoveryTransfer,
 }: AnalyzeViewProps) {
   const [jobText, setJobText] = useState("");
   const [jobUrl, setJobUrl] = useState("");
@@ -74,11 +82,16 @@ export function AnalyzeView({
   const [pendingOverwriteUrl, setPendingOverwriteUrl] = useState<string | null>(
     null
   );
+  const [activeTransferBanner, setActiveTransferBanner] =
+    useState<FormattedDiscoveryTransfer | null>(null);
+  const [queuedDiscoveryTransfer, setQueuedDiscoveryTransfer] =
+    useState<FormattedDiscoveryTransfer | null>(null);
 
   const coordinatorRef = useRef(
     new AnalysisRequestCoordinator<JobAnalysisResult>()
   );
   const fetchAbortRef = useRef<AbortController | null>(null);
+  const handledTransferIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const coordinator = coordinatorRef.current;
@@ -98,6 +111,66 @@ export function AnalyzeView({
     () => new Date().toISOString().slice(0, 10)
   );
   const [savedSuccessId, setSavedSuccessId] = useState<string | null>(null);
+
+  function applyDiscoveryTransfer(
+    transfer: FormattedDiscoveryTransfer,
+    forceCancelRunning: boolean
+  ) {
+    if (forceCancelRunning) {
+      coordinatorRef.current.cancel();
+      fetchAbortRef.current?.abort();
+      fetchAbortRef.current = null;
+      setIsLoading(false);
+      setIsFetchingJob(false);
+    }
+
+    setJobText(transfer.text);
+    setJobUrl(transfer.url);
+    setResult(null);
+    setErrorMessage(null);
+    setCancelledMessage(null);
+    setFetchError(null);
+    setFetchResult(null);
+    setDeadlineConflictAcknowledged(false);
+    setPendingOverwriteUrl(null);
+    setSavedSuccessId(null);
+    setSaveNotes("");
+    setAvailabilityStatus("Ei tarkistettu");
+    setAvailabilityVerifiedAt("");
+    setAvailabilitySourceUrl(transfer.url);
+    setActiveTransferBanner(transfer);
+    setQueuedDiscoveryTransfer(null);
+  }
+
+  useEffect(() => {
+    if (!pendingDiscoveryTransfer) return;
+    if (handledTransferIdRef.current === pendingDiscoveryTransfer.transferId) {
+      return;
+    }
+    handledTransferIdRef.current = pendingDiscoveryTransfer.transferId;
+
+    const needsConfirm = shouldConfirmDiscoveryTransfer({
+      isLoading: isLoading || coordinatorRef.current.isRunning(),
+      isFetchingJob,
+      jobText,
+      hasResult: result !== null,
+    });
+
+    if (needsConfirm) {
+      setQueuedDiscoveryTransfer(pendingDiscoveryTransfer);
+    } else {
+      applyDiscoveryTransfer(pendingDiscoveryTransfer, false);
+    }
+
+    onConsumeDiscoveryTransfer?.(pendingDiscoveryTransfer.transferId);
+  }, [
+    pendingDiscoveryTransfer,
+    isLoading,
+    isFetchingJob,
+    jobText,
+    result,
+    onConsumeDiscoveryTransfer,
+  ]);
 
   function handleCancelAnalysis() {
     const didCancel = coordinatorRef.current.cancel();
@@ -272,6 +345,8 @@ export function AnalyzeView({
     setFetchResult(null);
     setDeadlineConflictAcknowledged(false);
     setPendingOverwriteUrl(null);
+    setActiveTransferBanner(null);
+    setQueuedDiscoveryTransfer(null);
     setSavedSuccessId(null);
     setSaveNotes("");
     setAvailabilityStatus("Ei tarkistettu");
@@ -350,6 +425,84 @@ export function AnalyzeView({
             Täytä esimerkkiteksti
           </button>
         </div>
+
+        {queuedDiscoveryTransfer && (
+          <div
+            role="alertdialog"
+            aria-label="Vahvista työpaikkahaun ilmoituksen tuonti"
+            className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+          >
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">
+                  Analyysinäkymässä on jo syötettyä sisältöä, tulos tai
+                  keskeneräinen toiminto.
+                </p>
+                <p className="text-xs text-amber-900 mt-0.5">
+                  Haluatko korvata nykyisen näkymän työpaikkahausta valitulla
+                  ilmoituksella:{" "}
+                  <span className="font-semibold">
+                    {queuedDiscoveryTransfer.title} ({queuedDiscoveryTransfer.company})
+                  </span>
+                  ?
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() =>
+                  applyDiscoveryTransfer(queuedDiscoveryTransfer, true)
+                }
+                className="px-3 py-1.5 text-xs font-medium text-white bg-amber-800 rounded-md hover:bg-amber-900 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Korvaa ja tuo löydetty ilmoitus
+              </button>
+              <button
+                type="button"
+                onClick={() => setQueuedDiscoveryTransfer(null)}
+                className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Säilytä nykyinen työ
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeTransferBanner && (
+          <div
+            role="status"
+            className={`mt-4 rounded-md border p-3.5 text-xs space-y-1.5 ${
+              activeTransferBanner.warnings.length > 0
+                ? "border-amber-300 bg-amber-50 text-amber-950"
+                : "border-emerald-200 bg-emerald-50 text-emerald-950"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-semibold">
+                Tuotu työpaikkahausta: {activeTransferBanner.title} (
+                {activeTransferBanner.company})
+              </p>
+              <button
+                type="button"
+                onClick={() => setActiveTransferBanner(null)}
+                className="text-[11px] underline opacity-80 hover:opacity-100 cursor-pointer"
+              >
+                Piilota ilmoitus
+              </button>
+            </div>
+            <p>
+              Tarkista ja tarvittaessa muokkaa ilmoitustekstiä alla ennen kuin
+              käynnistät Gemini-analyysin painamalla &quot;Analysoi ilmoitus&quot;.
+            </p>
+            {activeTransferBanner.warnings.map((w, idx) => (
+              <p key={idx} className="font-medium text-amber-900">
+                {w}
+              </p>
+            ))}
+          </div>
+        )}
 
         <form onSubmit={handleAnalyze} className="mt-5 space-y-4">
           <div>

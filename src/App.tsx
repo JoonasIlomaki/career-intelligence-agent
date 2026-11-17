@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   BookmarkCheck,
   Columns2,
+  Compass,
   FileSearch,
   Menu,
   UserCheck,
@@ -10,6 +11,7 @@ import {
 import type {
   CandidateProfile,
   CareerBackupPayload,
+  DiscoveredJob,
   JobAnalysisResult,
   SavedJobEntry,
 } from "./types/career.ts";
@@ -24,15 +26,21 @@ import {
   applySavedJobMetaPatch,
   type SavedJobMetaPatch,
 } from "./lib/timestamps.ts";
+import {
+  formatDiscoveredJobForAnalysis,
+  type FormattedDiscoveryTransfer,
+} from "./lib/discoveryHandoff.ts";
 import { AnalyzeView } from "./components/AnalyzeView.tsx";
+import { DiscoverJobsView } from "./components/DiscoverJobsView.tsx";
 import { SavedJobsView } from "./components/SavedJobsView.tsx";
 import { CompareView } from "./components/CompareView.tsx";
 import { ProfileView } from "./components/ProfileView.tsx";
 
-type ActiveTab = "analyze" | "saved" | "compare" | "profile";
+type ActiveTab = "analyze" | "discover" | "saved" | "compare" | "profile";
 
 const TAB_LABELS: Record<ActiveTab, string> = {
   analyze: "Analysoi ilmoitus",
+  discover: "Löydä työpaikkoja",
   saved: "Hakukohteet",
   compare: "Vertailu",
   profile: "Hakijaprofiili",
@@ -50,6 +58,8 @@ export default function App() {
   );
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [selectedForCompare, setSelectedForCompare] = useState<string[]>([]);
+  const [pendingDiscoveryTransfer, setPendingDiscoveryTransfer] =
+    useState<FormattedDiscoveryTransfer | null>(null);
 
   useEffect(() => {
     saveSavedJobs(savedJobs);
@@ -153,6 +163,18 @@ export default function App() {
     }
   }
 
+  function handleSelectDiscoveredJobForAnalysis(job: DiscoveredJob) {
+    const formatted = formatDiscoveredJobForAnalysis(job);
+    setPendingDiscoveryTransfer(formatted);
+    navigateTo("analyze");
+  }
+
+  const handleConsumeDiscoveryTransfer = useCallback((transferId: string) => {
+    setPendingDiscoveryTransfer((prev) =>
+      prev?.transferId === transferId ? null : prev
+    );
+  }, []);
+
   const navItems: Array<{
     id: ActiveTab;
     label: string;
@@ -160,6 +182,7 @@ export default function App() {
     count?: number;
   }> = [
     { id: "analyze", label: "Analysoi ilmoitus", icon: FileSearch },
+    { id: "discover", label: "Löydä työpaikkoja", icon: Compass },
     {
       id: "saved",
       label: "Hakukohteet",
@@ -328,15 +351,25 @@ export default function App() {
 
         {/* Viewport Container */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto">
-          {activeTab === "analyze" && (
+          <div className={activeTab === "analyze" ? "block" : "hidden"}>
             <AnalyzeView
               profile={profile}
               savedJobs={savedJobs}
               onSaveNewJob={handleSaveNewJob}
               onUpdateExistingJob={handleUpdateExistingJob}
               onInspectSavedJob={handleInspectSavedJob}
+              pendingDiscoveryTransfer={pendingDiscoveryTransfer}
+              onConsumeDiscoveryTransfer={handleConsumeDiscoveryTransfer}
             />
-          )}
+          </div>
+
+          <div className={activeTab === "discover" ? "block" : "hidden"}>
+            <DiscoverJobsView
+              profile={profile}
+              onSelectJobForAnalysis={handleSelectDiscoveredJobForAnalysis}
+              onGoToProfile={() => navigateTo("profile")}
+            />
+          </div>
 
           {activeTab === "saved" && (
             <SavedJobsView

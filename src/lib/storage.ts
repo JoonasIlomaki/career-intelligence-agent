@@ -2,16 +2,72 @@ import { DEFAULT_CANDIDATE_PROFILE } from "../data/defaultProfile.ts";
 import {
   candidateProfileSchema,
   careerBackupSchema,
+  discoveryPreferencesSchema,
   savedJobEntrySchema,
 } from "./validation.ts";
 import type {
   CandidateProfile,
   CareerBackupPayload,
+  DiscoverySearchPreferences,
   SavedJobEntry,
 } from "../types/career.ts";
 
 const PROFILE_STORAGE_KEY = "cia_candidate_profile_v1";
 const JOBS_STORAGE_KEY = "cia_saved_jobs_v1";
+const DISCOVERY_PREFS_STORAGE_KEY = "cia_discovery_preferences_v1";
+
+export const DEFAULT_DISCOVERY_PREFERENCES: DiscoverySearchPreferences = {
+  useSavedProfile: true,
+  seniorityLevel: "intern_trainee_junior",
+  locationQuery: "Uusimaa",
+  remotePreference: "finland_compatible",
+  industryFocus: "it_cyber_and_pathways",
+  languages: ["fi", "en"],
+  keyword: "",
+};
+
+export function isDefaultCandidateProfile(profile: CandidateProfile): boolean {
+  const keys: Array<keyof Omit<CandidateProfile, "updatedAt">> = [
+    "headline",
+    "institutionAndDegree",
+    "studyProgress",
+    "previousItInternship",
+    "coursework",
+    "technicalSkills",
+    "aiExperienceNote",
+    "otherWorkExperience",
+    "careerGoals",
+    "availabilityAndLocation",
+    "strictConstraints",
+  ];
+  return keys.every(
+    (key) => profile[key].trim() === DEFAULT_CANDIDATE_PROFILE[key].trim()
+  );
+}
+
+export function loadDiscoveryPreferences(
+  storage: Pick<Storage, "getItem"> | undefined =
+    typeof window !== "undefined" ? window.localStorage : undefined
+): DiscoverySearchPreferences {
+  try {
+    const raw = storage?.getItem(DISCOVERY_PREFS_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_DISCOVERY_PREFERENCES };
+    const parsed = JSON.parse(raw);
+    const validated = discoveryPreferencesSchema.safeParse(parsed);
+    if (!validated.success) return { ...DEFAULT_DISCOVERY_PREFERENCES };
+    return validated.data;
+  } catch {
+    return { ...DEFAULT_DISCOVERY_PREFERENCES };
+  }
+}
+
+export function saveDiscoveryPreferences(
+  preferences: DiscoverySearchPreferences,
+  storage: Pick<Storage, "setItem"> | undefined =
+    typeof window !== "undefined" ? window.localStorage : undefined
+): void {
+  storage?.setItem(DISCOVERY_PREFS_STORAGE_KEY, JSON.stringify(preferences));
+}
 
 export function loadCandidateProfile(
   storage: Pick<Storage, "getItem"> | undefined =
@@ -105,3 +161,4 @@ export function parseBackupJson(rawJson: string): CareerBackupPayload {
 
   return result.data;
 }
+
